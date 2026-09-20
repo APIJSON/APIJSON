@@ -195,6 +195,50 @@ Note: The UI is APIAuto, the URL+JSON is APIJSON<br/>
 You can skip this step and use 'apijson.cn:8080'. <br />
 See https://github.com/APIJSON/APIJSON-Demo/blob/master/APIJSON-Java-Server/README-English.md
 
+### Maven
+#### 1. Add the JitPack repository to pom.xml
+```xml
+	<repositories>
+		<repository>
+		    <id>jitpack.io</id>
+		    <url>https://jitpack.io</url>
+		</repository>
+	</repositories>
+```
+<br />
+
+#### 2. Add the APIJSON dependency to pom.xml
+```xml
+	<dependency>
+	    <groupId>com.github.APIJSON</groupId>
+	    <artifactId>APIJSON</artifactId>
+	    <version>latest</version>
+	</dependency>
+```
+
+<br />
+<br />
+
+### Gradle
+#### 1. Add the JitPack repository in your root build.gradle at the end of repositories
+```gradle
+	allprojects {
+		repositories {
+			...
+			maven { url 'https://jitpack.io' }
+		}
+	}
+```
+<br />
+
+#### 2. Add the APIJSON dependency in one of your modules(such as `app`)
+```gradle
+	dependencies {
+	        implementation 'com.github.APIJSON:APIJSON:latest'
+	}
+```
+
+
 <br />
 
 ## <h2 id="3">3. Frontend usage<h2/> 

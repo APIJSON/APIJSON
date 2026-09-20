@@ -8,7 +8,7 @@
 	<version>10.0.0</version>
 	<packaging>jar</packaging>
 
-	<name>APIJSONORM</name>
+	<name>APIJSON</name>
 	<description>APIJSON ORM Library</description>
 
 	<properties>
