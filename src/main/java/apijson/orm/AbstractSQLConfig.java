@@ -6585,9 +6585,30 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				///* SELECT  count(*)  AS count  FROM sys.Moment AS Moment
 				//			   LEFT JOIN ( SELECT *  FROM sys.Comment ) AS Comment ON Comment.momentId = Moment.id LIMIT 1 OFFSET 0 */
 				if (column != null && joinConfig.isMSQL()) { // 暂时这样兼容 PostgreSQL 等不支持 SELECT 中不包含对应 key 的隐式 ON 关联字段的数据库
+					// 当前副表自身的关联键（joinConfig 是当前副表）
+					Set<String> columnSet = new LinkedHashSet<>();
 					for (On on : onList) {
-						column.add(on.getKey()); // TODO PostgreSQL 等需要找到具体的 targetTable 对应 targetKey 来加到 SELECT，比直接 SELECT * 性能更好
+						columnSet.add(on.getKey());
 					}
+					// issue #824：多表 JOIN 时，其它副表的 ON 可能引用当前副表的字段（如
+					// Warehose_info.id@ = /Location_info/warehouse_id 引用 Location_info.warehouse_id）。
+					// 只收集当前副表自身的 on.getKey() 会漏掉被引用的字段，生成子查询缺列导致 Unknown column。
+					// 这里把所有 JOIN 的 ON 里 target 指向当前副表的 targetKey 也补进 SELECT 列。
+					for (Join<T, M, L> other : joinList) {
+						List<On> otherOnList = other.getOnList();
+						if (otherOnList == null) {
+							continue;
+						}
+						// 当前副表的别名（含主表引用自身场景）
+						String currentAlias = SQLConfig.gainSQLAlias(table, alias);
+						for (On otherOn : otherOnList) {
+							if (currentAlias.equals(SQLConfig.gainSQLAlias(otherOn.getTargetTable(), otherOn.getTargetAlias()))) {
+								columnSet.add(otherOn.getTargetKey());
+							}
+						}
+					}
+					column.addAll(columnSet);
+					// TODO PostgreSQL 等需要找到具体的 targetTable 对应 targetKey 来加到 SELECT，比直接 SELECT * 性能更好
 				}
 
 				joinConfig.setMethod(GET);  // 子查询不能为 SELECT count(*) ，而应该是 SELECT momentId
