@@ -12,13 +12,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 /**
- * 复现 issue #824：PostgreSQL + HEAD(count 分页) + JOIN 时，
- * LEFT JOIN 子查询 SELECT 只含副表关联键，缺 ON 引用的主表字段，PG 报 column not found。
+ * 复现 issue #824：多表 JOIN + HEAD(count 分页) 子查询字段缺失。
+ * - PostgreSQL：LEFT JOIN 子查询回退 SELECT *（main 已修复原报告场景，此处作回归）
+ * - MySQL：子查询只选自身关联键，缺被其它 ON 引用的字段，仍会报 Unknown column（本次修复）
  */
 public class AbstractSQLConfigJoinCountTest {
 	private static final String MAIN_TABLE = "Inventory";
