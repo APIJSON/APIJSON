@@ -363,7 +363,7 @@ Java, C#, PHP, Node, Python 等后端 Demo 及数据。<br />
 https://github.com/APIJSON/APIJSON-Demo <br />
 
 #### 新增扩展
-目前官方有 apijson-column, apijson-router 两个插件
+目前已有 apijson-column, apijson-router, apijson-milvus, apijson-mongodb, apijson-influxdb, apijson-cassandra, apijson-jackson, apijson-fastjson2, apijson-gson, apijson-query-spring-boot-starter, apijson-dynamic-datasource 等 10+ 插件
 
 ##### 1.基于或整合 [APIJSONORM](https://github.com/Tencent/APIJSON/blob/master/APIJSONORM) 或 [apijson-framework](https://github.com/APIJSON/apijson-framework) 来实现的库/框架
 
