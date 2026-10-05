@@ -84,6 +84,7 @@
 - [Ziran Fu](https://github.com/fuziran)
 - [xiaoaozz](https://github.com/xiaoaozz)
 - [Henrique](https://github.com/henriquejsza)
+- [youdaoSu](https://github.com/youdaoSu)
 
 
 #### 其中特别致谢: <br/>
