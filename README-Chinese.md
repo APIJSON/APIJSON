@@ -273,7 +273,7 @@ https://github.com/APIJSON/APIJSON/issues/132#issuecomment-1106669540
 
 ### 快速上手
 
-#### 1.后端上手
+#### 1.后端上手 [![](https://jitpack.io/v/APIJSON/APIJSON.svg)](https://jitpack.io/#APIJSON/APIJSON)
 可以跳过这个步骤，直接用APIJSON服务器IP地址 apijson.cn:8080 来测试接口。<br />
 见&nbsp; [APIJSON后端上手 - Java](https://github.com/APIJSON/APIJSON-Demo/tree/master/APIJSON-Java-Server)<br />
 
