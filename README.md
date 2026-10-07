@@ -191,7 +191,8 @@ Note: The UI is APIAuto, the URL+JSON is APIJSON<br/>
 ![](https://raw.githubusercontent.com/TommyLemon/StaticResources/master/APIJSON/APIJSON_query_summary.gif) 
 
 
-## <h2 id="2">2.Backend usage<h2/>
+## <h2 id="2">2.Backend usage [![](https://jitpack.io/v/APIJSON/APIJSON.svg)](https://jitpack.io/#APIJSON/APIJSON)<h2/>
+
 You can skip this step and use 'apijson.cn:8080'. <br />
 See https://github.com/APIJSON/APIJSON-Demo/blob/master/APIJSON-Java-Server/README-English.md
 
