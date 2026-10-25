@@ -540,6 +540,8 @@ Issue/问卷 一般解答顺序：贡献者 > 帮助他人的用户 > 提供任�
 
 [APIJSON 三：demo 主体代码拆解与 TaoToken 统一 Key 接入实践](https://blog.csdn.net/weixin_35755823/article/details/166828717)
 
+[APIJSON：基于 JSON 的零代码 ORM 与通信协议实战指南](https://blog.csdn.net/gitblog_00401/article/details/159789805)
+
 ### 生态项目
 [APIJSON-Demo](https://github.com/APIJSON/APIJSON-Demo) APIJSON 各种语言、各种框架 的 使用示例项目、上手文档、测试数据 SQL 文件 等
 
