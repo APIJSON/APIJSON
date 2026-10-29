@@ -107,7 +107,7 @@ It also allows users to get data more quickly with self-defined form and fewer e
 #### For getting data:
 You can get any data by defining the specific information you want and send it to the server. <br />
 You can get different types of data by making just one request to the server. <br />
-It's very convenient and flexible, and dosen't require different API endpoints with multiple requests. <br />
+It's very convenient and flexible, and doesn't require different API endpoints with multiple requests. <br />
 It provides CRUD(read and write), Fuzzy Search, Remote Function Calls, etc. <br />
 You can also save duplicate data, see request history, etc. <br />
 
@@ -346,8 +346,8 @@ If you have any questions or suggestions, you can [create an issue](https://gith
 	
 [More APIJSON Users](https://github.com/APIJSON/APIJSON/issues/73)
 
-### Contributers of APIJSON:
-[Contributers](/CONTRIBUTING.md) for the APIJSON core project(7 Tencent engineers, 1 Microsoft engineer, 1 Zhihu architect, 1 Bytedance(TikTok) engineer, 1 NetEase engineer, 1 Zoom engineer, 1 YTO Express engineer, 1 Zhilian engineer, 1 UC student、3 SUSTech students, etc.): <br />
+### Contributors of APIJSON:
+[Contributors](/CONTRIBUTING.md) for the APIJSON core project(7 Tencent engineers, 1 Microsoft engineer, 1 Zhihu architect, 1 Bytedance(TikTok) engineer, 1 NetEase engineer, 1 Zoom engineer, 1 YTO Express engineer, 1 Zhilian engineer, 1 UC student、3 SUSTech students, etc.): <br />
 <br />
 <img width="815" height="181" alt="Screenshot 2026-04-18 at 05 28 48" src="https://github.com/user-attachments/assets/7a5a76f4-b1a2-4ac0-b7ee-901611adeab6" />
 
@@ -365,7 +365,7 @@ https://search.gitee.com/?skin=rec&type=repository&q=apijson&sort=stars_count <b
 </div>
 <br />
 
-Thanks to all contributers of APIJSON!
+Thanks to all contributors of APIJSON!
 
 <br />
 
@@ -383,7 +383,7 @@ APIJSON was shown as a top open source Java projects on OSS Compass [#518](https
 ### Ecosystem
 [APIJSON-Demo](https://github.com/APIJSON/APIJSON-Demo) Demo projects with document and SQL files for APIJSON with different programming languages and different frameworks
 
-[A2API](https://github.com/TommyLemon/A2API) AI generate UI once, API view/edit data everytime safely, quickly and stably. Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. 
+[A2API](https://github.com/TommyLemon/A2API) AI generate UI once, API view/edit data every time safely, quickly and stably. Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. 
 
 [apijson-orm](https://github.com/APIJSON/apijson-orm) APIJSON ORM library, Maven, Gradle, etc can be used for dependencies
 
@@ -471,7 +471,7 @@ APIJSON was shown as a top open source Java projects on OSS Compass [#518](https
 
 [SpringServer1.2-APIJSON](https://github.com/Airforce-1/SpringServer1.2-APIJSON) The smart Party building server provides interfaces for uploading and downloading files
 
-[apijson_template](https://github.com/abliger/apijson_template) APIJSON Java template, using Gradle to manage dependencie and building apps
+[apijson_template](https://github.com/abliger/apijson_template) APIJSON Java template, using Gradle to manage dependency and building apps
   
 [api-json-demo](https://gitee.com/hxdwd/api-json-demo) Demo for APIJSON to replace traditional ORM, compated Oracle transactions
 
