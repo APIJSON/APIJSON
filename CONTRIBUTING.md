@@ -83,9 +83,9 @@
 - [014-code](https://github.com/014-code)(东信时代、用友、福州市榕智 工程师)
 - [Ziran Fu](https://github.com/fuziran)
 - [xiaoaozz](https://github.com/xiaoaozz)
-- [Henrique](https://github.com/henriquejsza)
+- [Henrique](https://github.com/henriquejsza)(Goiania-GO, Brazil)
 - [youdaoSu](https://github.com/youdaoSu)
-
+- [Ari (Hamid) Zare](https://github.com/hamidzr)(Axon AI Staff Software Engineer)
 
 #### 其中特别致谢: <br/>
 cloudAndMonkey 提交的 11 个 Commits, 对 APIJSON 做出了 1,496 增加和 845 处删减(截止 2022/12/15 日)； <br/>
