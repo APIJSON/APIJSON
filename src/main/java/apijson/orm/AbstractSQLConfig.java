@@ -82,6 +82,8 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 					+ "(MICROSECOND|SECOND|MINUTE|HOUR|DAY|WEEK|MONTH|QUARTER|YEAR)$"
 	);
 	private static final Pattern MYSQL_TIME_FRACTION_PATTERN = Pattern.compile("\\.([0-9]+)$");
+	private static final Pattern KINGBASE_ORACLE_JSON_LENGTH_FILTER = Pattern.compile(
+			"json_length\\(\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*\\)\\s*(<=|>=|<>|!=|=|<|>)\\s*([0-9]+)");
 	private static final int KINGBASE_MYSQL_IDENTIFIER_BYTES = 63;
 	private static final String KINGBASE_MYSQL_PROJECTION_PREFIX = "$apijson$";
 
@@ -1934,6 +1936,14 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			}
 		}
 
+		if (isKingBaseOracle() && !containRaw) {
+			java.util.regex.Matcher length = KINGBASE_ORACLE_JSON_LENGTH_FILTER.matcher(expression);
+			if (length.matches()) {
+				return "jsonb_array_length(CAST(" + gainKey(length.group(1)) + " AS jsonb))"
+						+ length.group(2) + length.group(3);
+			}
+		}
+
 		// MATCH(...) AGAINST(...) is a two-part full-text expression. Passing only
 		// the substring beginning with '(' drops the MATCH function name, which
 		// prevents database-specific full-text conversion from recognizing it.
@@ -2087,7 +2097,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	 * their wrapper. Other modes keep the existing JSON/full-text conversions.
 	 */
 	protected boolean shouldMoveHavingToWhere() {
-		if ((isKingBaseMySQL() == false && isKingBaseSQLServer() == false)
+		if ((isKingBaseMySQL() == false && isKingBaseSQLServer() == false && isKingBaseOracle() == false)
 				|| StringUtil.isNotEmpty(getGroup(), true)
 				|| (joinList != null && joinList.isEmpty() == false)) {
 			return false;
@@ -2096,6 +2106,25 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		Map<String, Object> having = getHaving();
 		if (having == null || having.isEmpty()) {
 			return false;
+		}
+		if (isKingBaseOracle()) {
+			// A JSON array length comparison is a row filter only in an ungrouped,
+			// non-aggregate projection with no dependency on a SELECT alias.
+			if (RequestMethod.isGetMethod(getMethod(), false) == false
+					|| (getRaw() != null && (getRaw().contains(KEY_HAVING) || getRaw().contains(KEY_COLUMN)))) {
+				return false;
+			}
+			if (column != null) for (String item : column) {
+				if (KingbaseMySQLExpressions.hasAggregateOrWindow(item, SQL_AGGREGATE_FUNCTION_MAP.keySet())) return false;
+			}
+			for (Object value : having.values()) {
+				if (!(value instanceof String)) return false;
+				java.util.regex.Matcher length = KINGBASE_ORACLE_JSON_LENGTH_FILTER.matcher((String) value);
+				if (!length.matches()) return false;
+				if (columnAliasExpressionMap != null && columnAliasExpressionMap.keySet().stream()
+						.anyMatch(length.group(1)::equalsIgnoreCase)) return false;
+			}
+			return true;
 		}
 		if (isKingBaseMySQL() && (getRaw() == null || !getRaw().contains(KEY_HAVING))
 				&& (getRaw() == null || !getRaw().contains(KEY_COLUMN))) {
@@ -5458,7 +5487,30 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				else if (isKingBaseSQLServer()) {
 					condition += (gainKey(column) + "::jsonb @> " + gainValue(key, column, newJSONArray(c)) + "::jsonb");
 				}
-				else if (isOracle() || isDameng() || isKingBase() || isKingBaseOracle()) {
+				else if (isKingBaseOracle()) {
+					String target = "CAST(" + gainKey(column) + " AS jsonb)";
+					String jsonPath = path == null ? "" : ((String) path).trim();
+					boolean hasPath = !jsonPath.isEmpty() && !"$".equals(jsonPath);
+					if (hasPath) {
+						target = "EXISTS (SELECT 1 FROM jsonb_path_query(" + target + ", CAST("
+								+ gainKingbaseOracleJsonArgument(jsonPath) + " AS jsonpath), '{}'::jsonb, true)"
+								+ " AS _apijson_json(value) WHERE _apijson_json.value";
+					}
+					String candidate;
+					if ("".equals(c)) {
+						// Oracle mode can normalize an empty SQL string to NULL.
+						candidate = "'\"\"'::jsonb";
+					}
+					else if (c instanceof String) {
+						candidate = "to_jsonb(CAST(" + gainKingbaseOracleJsonArgument((String) c) + " AS varchar))";
+					}
+					else {
+						String json = c == null ? "null" : JSON.toJSONString(c);
+						candidate = "CAST(" + gainKingbaseOracleJsonArgument(json) + " AS jsonb)";
+					}
+					condition += target + " @> " + candidate + (hasPath ? ")" : "");
+				}
+				else if (isOracle() || isDameng() || isKingBase()) {
 					condition += ("json_textcontains(" + gainKey(column) + ", " + (StringUtil.isEmpty(path, true)
 							? "'$'" : gainValue(key, column, path)) + ", " + gainValue(key, column, c == null ? null : c.toString()) + ")");
 				}
@@ -5481,7 +5533,11 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				}
 			}
 
-			if (condition.isEmpty()) {
+			if (condition.isEmpty() && isKingBaseOracle()) {
+				String target = gainKey(column);
+				condition = target + SQL.isNull(true) + OR + "CAST(" + target + " AS jsonb) = '[]'::jsonb";
+			}
+			else if (condition.isEmpty()) {
 				condition = gainKey(column) + SQL.isNull(true) + OR + gainLikeString(key, column, "[]"); // key = '[]' 无结果！
 			}
 			else {
@@ -5493,6 +5549,10 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			return "";
 		}
 		return gainCondition(not, condition);
+	}
+
+	private Object gainKingbaseOracleJsonArgument(String text) {
+		return isPrepared() ? gainValue(text) : "E'" + text.replace("\\", "\\\\").replace("'", "''") + "'";
 	}
 	//<> contain >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -6076,6 +6136,9 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			return sql;
 		}
 		int offset = getOffset(getPage(), count);
+		if (isKingBaseOracle()) {
+			return sql + KingbaseSQLDialect.ORACLE.getSelectLimit(offset, count);
+		}
 		String quote = getQuote();
 		String alias = quote + gainSQLAlias() + quote;
 		return "SELECT * FROM (SELECT " + alias + ".*, ROWNUM "+ quote + "RN" + quote +" FROM (" + sql + ") " + alias
@@ -6477,7 +6540,11 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 							sql += (first ? ON : AND) + (isNot ? "( " : "") + gainCondition(isNot, arrKeyPath
 									+ " IS NOT NULL AND " + arrKeyPath + "::jsonb @> " + itemKeyPath + "::jsonb") + (isNot ? ") " : "");
 						}
-						else if (isOracle() || isDameng() || isKingBase() || isKingBaseOracle()) {
+						else if (isKingBaseOracle()) {
+							sql += (first ? ON : AND) + (isNot ? "( " : "") + gainCondition(isNot, arrKeyPath
+									+ " IS NOT NULL AND CAST(" + arrKeyPath + " AS jsonb) @> to_jsonb(" + itemKeyPath + ")") + (isNot ? ") " : "");
+						}
+						else if (isOracle() || isDameng() || isKingBase()) {
 							sql += (first ? ON : AND) + (isNot ? "( " : "") + gainCondition(isNot, arrKeyPath
 									+ " IS NOT NULL AND json_textcontains(" + arrKeyPath
 									+ ", '$', " + itemKeyPath + ")") + (isNot ? ") " : "");

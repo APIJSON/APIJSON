@@ -42,15 +42,21 @@ public class OraclePaginationRegressionTest {
 	}
 
 	@Test
-	public void oldOracleAndCompatibilityModesKeepTheirExistingPagination() {
+	public void oldOracleAndDamengKeepTheirExistingPagination() {
 		for (String version : Arrays.asList("11.2", "12.1")) {
 			Config c = config("ORACLE", version);
 			assertTrue(c.page("SELECT * FROM a").contains("ROWNUM"));
 		}
-		for (String database : Arrays.asList("KINGBASE_ORACLE", "DAMENG")) {
-			Config c = config(database, "26.0");
-			assertTrue(database, c.page("SELECT * FROM a").contains("ROWNUM"));
-		}
+		assertTrue(config("DAMENG", "26.0").page("SELECT * FROM a").contains("ROWNUM"));
+	}
+
+	@Test
+	public void kingbaseOraclePaginationDoesNotAppendAnRnColumn() {
+		Config c = config("KINGBASE_ORACLE", "V009R002C016");
+		String sql = "SELECT id AS \"RN\" FROM a ORDER BY id";
+		assertEquals(sql + " OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY", c.page(sql));
+		c.setCount(0);
+		assertEquals(sql, c.page(sql));
 	}
 
 	@Test

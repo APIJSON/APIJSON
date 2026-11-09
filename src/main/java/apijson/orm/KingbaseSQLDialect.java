@@ -56,12 +56,11 @@ public enum KingbaseSQLDialect {
 	}
 
 	/**
-	 * SQL Server compatibility mode follows the SQL Server spelling of the
-	 * OFFSET/FETCH clause. Other T-SQL-family databases in APIJSON retain their
-	 * existing FETCH FIRST spelling.
+	 * Kingbase Oracle and SQL Server modes support OFFSET/FETCH without
+	 * introducing a synthetic result column.
 	 */
 	public String getSelectLimit(int offset, int count) {
-		if (isSQLServer()) {
+		if (isOracle() || isSQLServer()) {
 			return " OFFSET " + offset + " ROWS FETCH NEXT " + count + " ROWS ONLY";
 		}
 		return null;

@@ -176,19 +176,19 @@ public class JoinColumnOwnershipTest {
 	public void aliasesAndPaginationDoNotChangeExplicitBoundaries() throws Exception {
 		Config c = new Config("KINGBASE_ORACLE", "Moment", "id:mid", "content:body");
 		c.setCount(2);
-		c.setJoinList(Arrays.asList(join("KINGBASE_ORACLE", "User", "id:uid", "name:label")));
+		c.setJoinList(Arrays.asList(join("KINGBASE_ORACLE", "User", "id:uid", "name:RN")));
 		Map<String, Object> r =
 				run(
 						c,
-						new String[] {"mid", "body", "uid", "label", "RN"},
-						new String[] {"", "", "", "", ""},
-						new Object[][] {{12L, "moment", 7L, "user", 1L}});
+						new String[] {"mid", "body", "uid", "RN"},
+						new String[] {"", "", "", ""},
+						new Object[][] {{12L, "moment", 7L, "user"}});
 		assertEquals(12L, r.get("mid"));
 		assertFalse(r.containsKey("uid"));
 		assertFalse(r.containsKey("RN"));
 		Map user = (Map) ((Map) r.get(AbstractSQLExecutor.KEY_VICE_ITEM)).get("User");
 		assertEquals(7L, user.get("uid"));
-		assertFalse(user.containsKey("RN"));
+		assertEquals("user", user.get("RN"));
 	}
 
 	@Test

@@ -12,6 +12,7 @@ import java.sql.*;
 import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -282,7 +283,7 @@ public class KingbaseCompatibilityTest {
 				assertEquals(database, " ON " + expected, c.regexJoin(ignoreCase));
 			}
 			String contains = c.isKingBaseOracle()
-					? "json_textcontains(" + pattern + ", '$', " + name + ")"
+					? "CAST(" + pattern + " AS jsonb) @> to_jsonb(" + name + ")"
 					: c.isKingBaseMySQL() ? pattern + "::jsonb @> to_jsonb(" + name + ")"
 					: pattern + "::jsonb @> " + name + "::jsonb";
 			assertEquals(database, " ON " + pattern + " IS NOT NULL AND " + contains, c.relationJoin("<>"));
@@ -394,12 +395,20 @@ public class KingbaseCompatibilityTest {
 		assertTrue(kingbaseSqlServer, kingbaseSqlServer.contains("json_length("));
 		assertFalse(kingbaseSqlServer, kingbaseSqlServer.contains(" HAVING "));
 
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> kingbaseOracle =
+				jsonLengthHavingConfig(SQLConfig.DATABASE_KINGBASE_ORACLE);
+		String kingbaseOracleSql = kingbaseOracle.gainSQL(true);
+		assertTrue(kingbaseOracleSql, kingbaseOracleSql.contains("jsonb_array_length(CAST(\"pictureList\" AS jsonb))>0"));
+		assertFalse(kingbaseOracleSql, kingbaseOracleSql.contains(" HAVING "));
+		assertEquals(Arrays.asList(82002L), kingbaseOracle.getPreparedValueList());
+		kingbaseOracle.setColumn(Arrays.asList("count(id):n"));
+		assertTrue(kingbaseOracle.gainSQL(true).contains(" HAVING "));
+
 		for (String database :
 				Arrays.asList(
 						SQLConfig.DATABASE_MYSQL,
 						SQLConfig.DATABASE_POSTGRESQL,
-						SQLConfig.DATABASE_ORACLE,
-						SQLConfig.DATABASE_KINGBASE_ORACLE)) {
+						SQLConfig.DATABASE_ORACLE)) {
 			String sql = jsonLengthHavingConfig(database).gainSQL(true);
 			assertTrue(database + ": " + sql, sql.contains(" HAVING "));
 		}
@@ -596,9 +605,10 @@ public class KingbaseCompatibilityTest {
 		select.setAlias("u").setColumn(Arrays.asList("id", "name"));
 		select.putWhere("id", 7L, false).setCount(10).setPage(2);
 		String selectSql = select.gainSQL(true);
-		assertTrue(selectSql, selectSql.startsWith("SELECT * FROM (SELECT \"User__u\".*, ROWNUM \"RN\" FROM (SELECT"));
+		assertTrue(selectSql, selectSql.startsWith("SELECT"));
 		assertTrue(selectSql, selectSql.contains("FROM \"sys\".\"User\" WHERE"));
-		assertTrue(selectSql, selectSql.endsWith("WHERE \"RN\" > 20"));
+		assertTrue(selectSql, selectSql.endsWith(" OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY"));
+		assertFalse(selectSql, selectSql.contains("ROWNUM"));
 		assertFalse(selectSql, selectSql.contains(" AS \"u\""));
 		assertEquals(Arrays.asList(7L), select.getPreparedValueList());
 
@@ -801,10 +811,23 @@ public class KingbaseCompatibilityTest {
 			assertTrue(sql, !sql.contains("json_textcontains("));
 		}
 
-		String oracleSql = config(SQLConfig.DATABASE_KINGBASE_ORACLE)
-				.gainContainString("get<>", "get", new Object[] {"UNKNOWN"}, Logic.TYPE_OR);
-		assertTrue(oracleSql, oracleSql.contains("json_textcontains("));
-		assertFalse(oracleSql, oracleSql.contains("::jsonb"));
+		Map<String, Object> pathValue = new LinkedHashMap<>();
+		pathValue.put("path", "$[0]");
+		pathValue.put("value", 38710);
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> kingbaseOracle =
+				config(SQLConfig.DATABASE_KINGBASE_ORACLE);
+		kingbaseOracle.setPrepared(true);
+		String oracleSql = kingbaseOracle.gainContainString("get<>", "get",
+				new Object[] {pathValue}, Logic.TYPE_OR);
+		assertTrue(oracleSql, oracleSql.contains("jsonb_path_query(CAST(\"get\" AS jsonb), CAST(? AS jsonpath)"));
+		assertTrue(oracleSql, oracleSql.contains("value @> CAST(? AS jsonb)"));
+		assertEquals(Arrays.asList("$[0]", "38710"), kingbaseOracle.getPreparedValueList());
+		String stringSql = kingbaseOracle.gainContainString("get<>", "get",
+				new Object[] {"38710"}, Logic.TYPE_OR);
+		assertTrue(stringSql, stringSql.contains("@> to_jsonb(CAST(? AS varchar))"));
+		String nativeOracleSql = config(SQLConfig.DATABASE_ORACLE)
+				.gainContainString("get<>", "get", new Object[] {38710}, Logic.TYPE_OR);
+		assertTrue(nativeOracleSql, nativeOracleSql.contains("json_textcontains("));
 	}
 
 	@Test
@@ -1193,19 +1216,25 @@ public class KingbaseCompatibilityTest {
 						return true;
 					}
 				};
-		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> config = config(SQLConfig.DATABASE_KINGBASE_SQLSERVER);
-		config.setMethod(RequestMethod.POST).setId(123L).setIdGeneratedByAPIJSON(true);
-		config.setColumn(new ArrayList<>(Arrays.asList("id", "name")));
-		config.setValues(new ArrayList<>(Arrays.asList(new ArrayList<Object>(Arrays.asList(123L, "test")))));
+		for (String database : Arrays.asList(SQLConfig.DATABASE_KINGBASE_SQLSERVER, SQLConfig.DATABASE_KINGBASE_ORACLE,
+				SQLConfig.DATABASE_ORACLE, SQLConfig.DATABASE_KINGBASE_MYSQL)) {
+			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> config = config(database);
+			config.setMethod(RequestMethod.POST).setId(123L);
+			config.setColumn(Arrays.asList("id", "name"));
+			config.setValues(Collections.singletonList(Arrays.asList(123L, "test")));
 
-		assertTrue(executor.prepareDatabaseGeneratedId(config, null));
-		assertEquals(Arrays.asList("name"), config.getColumn());
-		assertEquals(Arrays.asList("test"), config.getValues().get(0));
-		assertEquals(null, config.getId());
+			assertFalse(executor.prepareDatabaseGeneratedId(config, null));
+			config.setIdGeneratedByAPIJSON(true);
+			boolean usesDatabaseId = config.isKingBaseSQLServer() || config.isKingBaseOracle();
+			assertEquals(database, usesDatabaseId, executor.prepareDatabaseGeneratedId(config, null));
+			assertEquals(usesDatabaseId ? Collections.singletonList("name") : Arrays.asList("id", "name"), config.getColumn());
+			assertEquals(usesDatabaseId ? Collections.singletonList("test") : Arrays.asList(123L, "test"), config.getValues().get(0));
+			assertEquals(usesDatabaseId ? null : 123L, config.getId());
+		}
 	}
 
 	@Test
-	public void hidesOnlyFinalOraclePaginationRowNumber() throws Exception {
+	public void preservesRnProjectionInKingbaseOraclePagination() throws Exception {
 		AbstractSQLExecutor<Long, Map<String, Object>, List<Object>> executor =
 				new AbstractSQLExecutor<Long, Map<String, Object>, List<Object>>() { };
 		SQLConfig<Long, Map<String, Object>, List<Object>> config = config(SQLConfig.DATABASE_KINGBASE_ORACLE).setCount(10);
@@ -1217,7 +1246,7 @@ public class KingbaseCompatibilityTest {
 				});
 
 		assertFalse(executor.isHideColumn(config, (ResultSet) null, metadata, 0, new LinkedHashMap<>(), 2, null, null));
-		assertTrue(executor.isHideColumn(config, (ResultSet) null, metadata, 0, new LinkedHashMap<>(), 3, null, null));
+		assertFalse(executor.isHideColumn(config, (ResultSet) null, metadata, 0, new LinkedHashMap<>(), 3, null, null));
 	}
 
 	@Test
