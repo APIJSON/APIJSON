@@ -96,6 +96,27 @@ public class KingbaseSemanticsLiveTest {
 		}
 	}
 
+	@Test
+	public void kingbaseOracleJsonLengthHavingFiltersTheSourceColumnOfAnAlias() throws Exception {
+		try (Connection connection = connect("KINGBASE_ORACLE")) {
+			connection.setReadOnly(true);
+			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
+					KingbaseSemanticsRegressionTest.config("KINGBASE_ORACLE");
+			c.setColumn(Arrays.asList("id", "pictureList:photos"));
+			c.setHaving(Collections.<String, Object>singletonMap("h", "json_length(photos)>0"));
+			c.setOrder("id+").setCount(1);
+
+			for (boolean hasPhysicalPhotos : new boolean[] {false, true}) {
+				// When present, the physical "photos" column would select the opposite row.
+				String fixture = "(SELECT 1 AS \"id\", CAST('[]' AS varchar(30)) AS \"pictureList\""
+						+ (hasPhysicalPhotos ? ", CAST('[9]' AS varchar(30)) AS \"photos\"" : "")
+						+ " UNION ALL SELECT 2, '[1]'" + (hasPhysicalPhotos ? ", '[]'" : "") + ") fixture";
+				String sql = c.gainSQL(true).replace(c.gainTablePath(), fixture);
+				assertEquals(sql, 2, ((Number) scalar(connection, sql, c.getPreparedValueList())).intValue());
+			}
+		}
+	}
+
 	private void assertDateFormat(Connection connection, String database) throws Exception {
 		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
 				KingbaseSemanticsRegressionTest.config(database);

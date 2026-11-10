@@ -1943,7 +1943,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		if (isKingBaseOracle() && !containRaw) {
 			java.util.regex.Matcher length = KINGBASE_JSON_LENGTH_FILTER.matcher(expression);
 			if (length.matches()) {
-				return "jsonb_array_length(CAST(" + gainKey(length.group(1)) + " AS jsonb))"
+				return "jsonb_array_length(CAST(" + gainKingbaseOracleJsonLengthKey(length.group(1)) + " AS jsonb))"
 						+ length.group(2) + length.group(3);
 			}
 		}
@@ -1956,6 +1956,32 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			return parseSQLExpression(KEY_HAVING, expression, containRaw, false, null);
 		}
 		return gainSQLFunction(method) + parseSQLExpression(KEY_HAVING, expression.substring(start), containRaw, false, null);
+	}
+
+	private String gainKingbaseOracleJsonLengthKey(String key) {
+		List<String> raw = getRaw();
+		if (column == null || !RequestMethod.isGetMethod(getMethod(), false)
+				|| (raw != null && raw.contains(KEY_COLUMN))) {
+			return gainKey(key);
+		}
+
+		// A row filter cannot read a SELECT alias. Resolve a direct projection
+		// before a physical column with the same name can shadow the alias.
+		String source = null;
+		for (String expression : column) {
+			String[] projections = expression.indexOf('(') < 0 ? StringUtil.split(expression) : new String[] {expression};
+			if (projections == null) continue;
+			for (String projection : projections) {
+				int index = KingbaseMySQLExpressions.aliasIndex(projection);
+				if (index <= 0 || !key.equals(projection.substring(index + 1))) continue;
+				String name = projection.substring(0, index);
+				if (!StringUtil.isName(name) || RAW_MAP.containsKey(name) || (source != null && !source.equals(name))) {
+					throw new UnsupportedOperationException("Kingbase Oracle json_length HAVING alias must refer to a single column: " + key);
+				}
+				source = name;
+			}
+		}
+		return source == null ? gainKey(key) : gainSQLKey(source);
 	}
 
 	/**
@@ -2117,7 +2143,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		}
 		if (isKingBaseOracle()) {
 			// A JSON array length comparison is a row filter only in an ungrouped,
-			// non-aggregate projection with no dependency on a SELECT alias.
+			// non-aggregate projection. Direct column aliases resolve to their source.
 			if (RequestMethod.isGetMethod(getMethod(), false) == false
 					|| (getRaw() != null && (getRaw().contains(KEY_HAVING) || getRaw().contains(KEY_COLUMN)))) {
 				return false;
@@ -2126,11 +2152,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				if (KingbaseMySQLExpressions.hasAggregateOrWindow(item, SQL_AGGREGATE_FUNCTION_MAP.keySet())) return false;
 			}
 			for (Object value : having.values()) {
-				if (!(value instanceof String)) return false;
-				java.util.regex.Matcher length = KINGBASE_JSON_LENGTH_FILTER.matcher((String) value);
-				if (!length.matches()) return false;
-				if (columnAliasExpressionMap != null && columnAliasExpressionMap.keySet().stream()
-						.anyMatch(length.group(1)::equalsIgnoreCase)) return false;
+				if (!(value instanceof String) || !KINGBASE_JSON_LENGTH_FILTER.matcher((String) value).matches()) return false;
 			}
 			return true;
 		}

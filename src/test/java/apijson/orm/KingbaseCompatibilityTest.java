@@ -28,6 +28,7 @@ import javax.sql.rowset.serial.SerialClob;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class KingbaseCompatibilityTest {
@@ -476,6 +477,40 @@ public class KingbaseCompatibilityTest {
 		config.setHaving(having);
 		config.setCount(3);
 		return config;
+	}
+
+	@Test
+	public void kingbaseOracleJsonLengthHavingUsesTheSourceOfAColumnAlias() throws Exception {
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
+				jsonLengthHavingConfig(SQLConfig.DATABASE_KINGBASE_ORACLE);
+		c.setColumn(Collections.singletonList("userId,pictureList:photos"));
+		c.setHaving(Collections.<String, Object>singletonMap("h", "json_length(photos)>0"));
+
+		String sql = c.gainSQL(true);
+		assertTrue(sql, sql.contains("SELECT \"userId\",\"pictureList\" \"photos\""));
+		assertTrue(sql, sql.contains("jsonb_array_length(CAST(\"pictureList\" AS jsonb))>0"));
+		assertFalse(sql, sql.contains("CAST(\"photos\" AS jsonb)"));
+		assertFalse(sql, sql.contains(" HAVING "));
+		assertEquals(Collections.singletonList(82002L), c.getPreparedValueList());
+
+		c.setColumn(Arrays.asList("userId", "otherPictures:photos"));
+		sql = c.gainSQL(true);
+		assertTrue(sql, sql.contains("jsonb_array_length(CAST(\"otherPictures\" AS jsonb))>0"));
+		assertEquals(Collections.singletonList(82002L), c.getPreparedValueList());
+	}
+
+	@Test
+	public void kingbaseOracleJsonLengthHavingRejectsNonColumnOrAmbiguousAliases() throws Exception {
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
+				jsonLengthHavingConfig(SQLConfig.DATABASE_KINGBASE_ORACLE);
+		c.setHaving(Collections.<String, Object>singletonMap("h", "json_length(photos)>0"));
+		for (List<String> projection : Arrays.asList(
+				Collections.singletonList("json_length(pictureList):photos"),
+				Arrays.asList("pictureList:photos", "otherPictures:photos"))) {
+			c.setColumn(projection);
+			UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class, () -> c.gainSQL(true));
+			assertTrue(error.getMessage(), error.getMessage().contains("alias must refer to a single column"));
+		}
 	}
 
 	@Test
