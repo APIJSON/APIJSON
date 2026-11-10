@@ -884,6 +884,21 @@ public abstract class AbstractFunctionParser<T, M extends Map<String, Object>, L
 			return s + ")";
 		}
 
+		/** Encode the arguments of a text CALL before Kingbase Oracle prepares it. */
+		String toKingbaseOracleCallString() {
+			StringBuilder call = new StringBuilder(getMethod()).append('(');
+			Object[] args = getValues();
+			if (args != null) {
+				for (int i = 0; i < args.length; i++) {
+					if (i > 0) call.append(',');
+					Object arg = args[i];
+					if (arg instanceof Boolean || arg instanceof Number) call.append(arg);
+					else call.append("E'").append(String.valueOf(arg).replace("\\", "\\\\").replace("'", "''")).append('\'');
+				}
+			}
+			return call.append(')').toString();
+		}
+
 	}
 
 	/**

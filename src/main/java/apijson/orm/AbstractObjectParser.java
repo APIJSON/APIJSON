@@ -1112,7 +1112,7 @@ public abstract class AbstractObjectParser<T, M extends Map<String, Object>, L e
             if (StringUtil.isNotEmpty(sch, true)) {
                 config.setSchema(sch);
             }
-			config.setProcedure(fb.toFunctionCallString(true));
+			config.setProcedure(config.isKingBaseOracle() ? fb.toKingbaseOracleCallString() : fb.toFunctionCallString(true));
 			result = parseResponse(config, true);
 
 			key = key.substring(1);

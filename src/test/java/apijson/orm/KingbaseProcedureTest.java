@@ -58,7 +58,8 @@ public class KingbaseProcedureTest {
 			Call call = new Call(config(database), input);
 			call.invoke("p(a,b,c)");
 			// Record the baseline's existing formatting, including its null limitation.
-			assertEquals("p('O'Reilly','null','null')", call.config.getProcedure());
+			assertEquals(call.config.isKingBaseOracle() ? "p(E'O''Reilly',E'null',E'null')"
+					: "p('O'Reilly','null','null')", call.config.getProcedure());
 			assertTrue(call.sql.startsWith("CALL "));
 			assertTrue(call.values.isEmpty());
 			assertEquals(1, call.configCreations); assertEquals(1, call.executions);
@@ -106,6 +107,44 @@ public class KingbaseProcedureTest {
 				new AbstractSQLExecutor<Long, Map<String, Object>, List<Object>>() {};
 		assertNull(executor.execute(statement, "BEGIN p(); END;"));
 		assertEquals(Arrays.asList("execute:1", "getResultSet:0"), calls);
+	}
+
+	@Test public void kingbaseOraclePreservesTextAndNumericArgumentsInCallSql() throws Exception {
+		Map<String, Object> input = new LinkedHashMap<>();
+		input.put("n", 17);
+		input.put("plain", "plain text");
+		input.put("special", "O'Reilly\\new");
+		Call call = new Call(config("KINGBASE_ORACLE"), input);
+		call.invoke("p(n,plain,special)");
+		assertEquals("CALL \"app\".p(17,E'plain text',E'O''Reilly\\\\new')", call.sql);
+		assertTrue(call.values.isEmpty());
+	}
+
+	@Test public void kingbaseOracleUsesPreparedExecutionAndHandlesNoResultSet() throws Exception {
+		List<String> calls = new ArrayList<>();
+		PreparedStatement statement = (PreparedStatement) Proxy.newProxyInstance(
+				getClass().getClassLoader(), new Class<?>[] {PreparedStatement.class},
+				(p, method, args) -> {
+					switch (method.getName()) {
+						case "execute":
+							calls.add("execute:" + (args == null ? 0 : args.length));
+							return false;
+						case "getResultSet": return null;
+						case "getUpdateCount": return 0;
+						default: throw new AssertionError(method);
+					}
+				});
+		AbstractSQLExecutor<Long, Map<String, Object>, List<Object>> executor =
+				new AbstractSQLExecutor<Long, Map<String, Object>, List<Object>>() {
+					@Override public PreparedStatement getStatement(SQLConfig<Long, Map<String, Object>, List<Object>> c) {
+						return statement;
+					}
+				};
+		Map<String, Object> result = executor.execute(config("KINGBASE_ORACLE").setProcedure("p()"), true);
+		assertEquals(Collections.singletonList("execute:0"), calls);
+		assertEquals(Collections.emptyList(), result.get("list"));
+		assertEquals(0, result.get("count"));
+		assertEquals(true, result.get("update"));
 	}
 
 	private static final class Call extends AbstractObjectParser<Long, Map<String, Object>, List<Object>> {

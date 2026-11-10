@@ -155,11 +155,11 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		int c = statement.executeUpdate(sql);
 		return c;
 	}
-	private final ThreadLocal<PreparedStatement> kingbaseMySQLPreparedCall = new ThreadLocal<>();
+	private final ThreadLocal<PreparedStatement> kingbasePreparedCall = new ThreadLocal<>();
 
 	@Override
 	public ResultSet execute(@NotNull Statement statement, String sql) throws Exception {
-		if (statement == kingbaseMySQLPreparedCall.get()) {
+		if (statement == kingbasePreparedCall.get()) {
 			// Kingbase JDBC rejects Statement.execute(String) on a PreparedStatement.
 			((PreparedStatement) statement).execute();
 		}
@@ -170,19 +170,20 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		return rs;
 	}
 
-	/** Execute the SQL already prepared for a Kingbase MySQL procedure/unknown result. */
+	/** Execute the SQL already prepared for a Kingbase MySQL or Oracle procedure. */
 	protected ResultSet executeUnknownType(@NotNull SQLConfig<T, M, L> config,
 			@NotNull Statement statement, String sql) throws Exception {
-		if (config.isKingBaseMySQL() && statement instanceof PreparedStatement) {
-			PreparedStatement previous = kingbaseMySQLPreparedCall.get();
-			kingbaseMySQLPreparedCall.set((PreparedStatement) statement);
+		if ((config.isKingBaseMySQL() || config.isKingBaseOracle())
+				&& statement instanceof PreparedStatement) {
+			PreparedStatement previous = kingbasePreparedCall.get();
+			kingbasePreparedCall.set((PreparedStatement) statement);
 			try {
 				// Keep the original extension hook, SQL text and statement identity.
 				return execute(statement, sql);
 			}
 			finally {
-				if (previous == null) kingbaseMySQLPreparedCall.remove();
-				else kingbaseMySQLPreparedCall.set(previous);
+				if (previous == null) kingbasePreparedCall.remove();
+				else kingbasePreparedCall.set(previous);
 			}
 		}
 		return execute(statement, sql);
@@ -254,6 +255,10 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 				result = JSON.createJSONObject();
 				result.put(JSONResponse.KEY_COUNT, updateCount);
 				result.put("update", updateCount >= 0);
+				if (rs == null && config.isKingBaseOracle()) {
+					result.put("list", JSON.createJSONArray());
+					return result;
+				}
 				//导致后面 rs.getMetaData() 报错 Operation not allowed after ResultSet closed		result.put("moreResults", statement.getMoreResults());
 			}
 			else {

@@ -14,12 +14,12 @@ public class KingbaseMySQLAdaptationRegressionTest {
 		return KingbaseSemanticsRegressionTest.config(db);
 	}
 
-	@Test public void kingbaseMysqlUnknownResultsExecuteTheAlreadyPreparedCall() throws Exception {
+	@Test public void kingbaseMysqlAndOracleExecuteTheAlreadyPreparedCall() throws Exception {
 		ResultSet result = (ResultSet) Proxy.newProxyInstance(getClass().getClassLoader(),
 				new Class<?>[]{ResultSet.class}, (p, m, a) -> null);
 		AbstractSQLExecutor<Long, Map<String,Object>, List<Object>> executor =
 				new AbstractSQLExecutor<Long, Map<String,Object>, List<Object>>() {};
-		for (String db : Arrays.asList("KINGBASE_MYSQL", "MYSQL", "KINGBASE_ORACLE", "KINGBASE_SQLSERVER")) {
+		for (String db : Arrays.asList("KINGBASE_MYSQL", "MYSQL", "KINGBASE_ORACLE", "ORACLE", "KINGBASE_SQLSERVER", "SQLSERVER")) {
 			List<String> calls = new ArrayList<>();
 			PreparedStatement statement = (PreparedStatement) Proxy.newProxyInstance(getClass().getClassLoader(),
 					new Class<?>[]{PreparedStatement.class}, (p, m, a) -> {
@@ -30,7 +30,8 @@ public class KingbaseMySQLAdaptationRegressionTest {
 						return m.getName().equals("getResultSet") ? result : null;
 					});
 			assertSame(result, executor.executeUnknownType(config(db), statement, "CALL test_proc(1)"));
-			assertEquals(Collections.singletonList(db.equals("KINGBASE_MYSQL") ? "prepared" : "CALL test_proc(1)"), calls);
+			boolean kingbasePrepared = db.equals("KINGBASE_MYSQL") || db.equals("KINGBASE_ORACLE");
+			assertEquals(Collections.singletonList(kingbasePrepared ? "prepared" : "CALL test_proc(1)"), calls);
 		}
 	}
 
