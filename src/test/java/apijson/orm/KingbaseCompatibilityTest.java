@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.rowset.serial.SerialBlob;
 import javax.sql.rowset.serial.SerialClob;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -186,6 +187,45 @@ public class KingbaseCompatibilityTest {
 		assertFalse(joinSql, joinSql.contains("ORDER BY"));
 		assertEquals("id+", comment.getOrder());
 		assertTrue(main.gainOrderString(true).contains("\"Comment\".\"id\" ASC"));
+		comment.setColumn(Arrays.asList("id:childId", "momentId"));
+		assertTrue(main.gainOrderString(true).contains("\"Comment\".\"childId\" ASC"));
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void kingbaseSqlServerVerifiesJoinedAndCachedRowsBeforeExecution() throws Exception {
+		for (String database : Arrays.asList("KINGBASE_SQLSERVER", "SQLSERVER", "KINGBASE_MYSQL", "KINGBASE_ORACLE")) {
+			SQLConfig<Long, Map<String, Object>, List<Object>> main = config(database, "Moment").setRole("OWNER");
+			SQLConfig<Long, Map<String, Object>, List<Object>> child = config(database, "Comment");
+			SQLConfig<Long, Map<String, Object>, List<Object>> cache = config(database, "Comment");
+			Join<Long, Map<String, Object>, List<Object>> join = new Join<>();
+			join.setJoinConfig(child);
+			join.setCacheConfig(cache);
+			main.setJoinList(Collections.singletonList(join));
+
+			List<SQLConfig<Long, Map<String, Object>, List<Object>>> verified = new ArrayList<>();
+			Verifier<Long, Map<String, Object>, List<Object>> recordingVerifier =
+					(Verifier<Long, Map<String, Object>, List<Object>>) Proxy.newProxyInstance(
+							Verifier.class.getClassLoader(), new Class<?>[] {Verifier.class}, (proxy, method, args) -> {
+								if (!"verifyAccess".equals(method.getName())) throw new AssertionError(method);
+								verified.add((SQLConfig<Long, Map<String, Object>, List<Object>>) args[0]);
+								return true;
+							});
+			RequestStructureJsonTest.TestParser parser = new RequestStructureJsonTest.TestParser(database) {
+				@Override
+				public Verifier<Long, Map<String, Object>, List<Object>> getVerifier() {
+					return recordingVerifier;
+				}
+			};
+			parser.setNeedVerifyRole(true).setGlobalRole("OWNER");
+			parser.onVerifyRole(main);
+			assertEquals(database, "KINGBASE_SQLSERVER".equals(database)
+					? Arrays.asList(main, child, cache) : Collections.singletonList(main), verified);
+			if ("KINGBASE_SQLSERVER".equals(database)) {
+				assertEquals("OWNER", child.getRole());
+				assertEquals("OWNER", cache.getRole());
+			}
+		}
 	}
 
 	@Test
@@ -275,17 +315,20 @@ public class KingbaseCompatibilityTest {
 			String pattern = q + "Comment" + q + "." + q + "pattern" + q;
 			String name = q + "User" + q + "." + q + "name" + q;
 			for (boolean ignoreCase : Arrays.asList(false, true)) {
-				String expected = c.isKingBaseSQLServer()
-						? pattern + " ~" + (ignoreCase ? "* " : " ") + name
-						: "regexp_like(" + pattern + ", " + name + (ignoreCase ? ", 'i'" : ", 'c'") + ")";
+				String expected = "regexp_like(" + pattern + ", " + name + (ignoreCase ? ", 'i'" : ", 'c'") + ")";
+				if (c.isKingBaseSQLServer()) {
+					expected = ignoreCase ? pattern + " ~* " + name
+							: "(CASE WHEN " + pattern + " IS NOT NULL AND " + name
+									+ " IS NOT NULL THEN pg_catalog.regexp_match(" + pattern + ", " + name
+									+ ", 'c') IS NOT NULL END)";
+				}
 				if (c.isKingBaseMySQL()) expected = "(CASE WHEN " + pattern + " IS NULL OR " + name
 						+ " IS NULL THEN NULL ELSE " + expected + " END)";
 				assertEquals(database, " ON " + expected, c.regexJoin(ignoreCase));
 			}
 			String contains = c.isKingBaseOracle()
 					? "CAST(" + pattern + " AS jsonb) @> to_jsonb(" + name + ")"
-					: c.isKingBaseMySQL() ? pattern + "::jsonb @> to_jsonb(" + name + ")"
-					: pattern + "::jsonb @> " + name + "::jsonb";
+					: pattern + "::jsonb @> to_jsonb(" + name + ")";
 			assertEquals(database, " ON " + pattern + " IS NOT NULL AND " + contains, c.relationJoin("<>"));
 		}
 	}
@@ -345,8 +388,7 @@ public class KingbaseCompatibilityTest {
 						SQLConfig.DATABASE_POSTGRESQL,
 						SQLConfig.DATABASE_ORACLE,
 						SQLConfig.DATABASE_SQLSERVER,
-						SQLConfig.DATABASE_KINGBASE_ORACLE,
-						SQLConfig.DATABASE_KINGBASE_SQLSERVER)) {
+						SQLConfig.DATABASE_KINGBASE_ORACLE)) {
 			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> unchanged =
 					config(database, "Moment");
 			unchanged.setColumn(Arrays.asList("json_length(pictureList):pictureCount"));
@@ -392,7 +434,7 @@ public class KingbaseCompatibilityTest {
 		assertTrue(nativeSqlServer, nativeSqlServer.contains(" HAVING (json_length("));
 		String kingbaseSqlServer =
 				jsonLengthHavingConfig(SQLConfig.DATABASE_KINGBASE_SQLSERVER).gainSQL(true);
-		assertTrue(kingbaseSqlServer, kingbaseSqlServer.contains("json_length("));
+		assertTrue(kingbaseSqlServer, kingbaseSqlServer.contains("CAST(\"pictureList\" AS jsonb))) AS _apijson_json_length(value))>0"));
 		assertFalse(kingbaseSqlServer, kingbaseSqlServer.contains(" HAVING "));
 
 		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> kingbaseOracle =
@@ -489,6 +531,8 @@ public class KingbaseCompatibilityTest {
 					outer.gainOrderString(true).contains("\"userId\""));
 			assertFalse(
 					outer.gainOrderString(true), outer.gainOrderString(true).contains("\"id\""));
+			source.setColumn(Arrays.asList("userId:authorId"));
+			assertEquals(" ORDER BY \"authorId\"", outer.gainOrderString(true));
 		}
 	}
 
@@ -814,6 +858,15 @@ public class KingbaseCompatibilityTest {
 		Map<String, Object> pathValue = new LinkedHashMap<>();
 		pathValue.put("path", "$[0]");
 		pathValue.put("value", 38710);
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> kingbaseSqlServer =
+				config(SQLConfig.DATABASE_KINGBASE_SQLSERVER);
+		kingbaseSqlServer.setPrepared(true);
+		String sqlServerPath = kingbaseSqlServer.gainContainString("get<>", "get",
+				new Object[] {pathValue}, Logic.TYPE_OR);
+		assertTrue(sqlServerPath, sqlServerPath.contains("jsonb_path_query(\"get\"::jsonb, CAST(? AS jsonpath)"));
+		assertEquals(Arrays.asList("$[0]", "38710"), kingbaseSqlServer.getPreparedValueList());
+		String sqlServerEmpty = kingbaseSqlServer.gainContainString("get<>", "get", new Object[0], Logic.TYPE_OR);
+		assertTrue(sqlServerEmpty, sqlServerEmpty.contains("CAST(\"get\" AS jsonb) = '[]'::jsonb"));
 		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> kingbaseOracle =
 				config(SQLConfig.DATABASE_KINGBASE_ORACLE);
 		kingbaseOracle.setPrepared(true);
@@ -828,6 +881,19 @@ public class KingbaseCompatibilityTest {
 		String nativeOracleSql = config(SQLConfig.DATABASE_ORACLE)
 				.gainContainString("get<>", "get", new Object[] {38710}, Logic.TYPE_OR);
 		assertTrue(nativeOracleSql, nativeOracleSql.contains("json_textcontains("));
+	}
+
+	@Test
+	public void kingbaseSqlServerDefaultsToLegalAggregateAndDistinctPagination() throws Exception {
+		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c = config(SQLConfig.DATABASE_KINGBASE_SQLSERVER);
+		c.setCount(3).setColumn(Arrays.asList("count(id):total"));
+		String aggregate = c.gainSQL(true);
+		assertFalse(aggregate, aggregate.contains("ORDER BY"));
+		assertTrue(aggregate, aggregate.endsWith("OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY"));
+
+		c.setDistinct(true).setColumn(Arrays.asList("name", "age"));
+		String distinct = c.gainSQL(true);
+		assertTrue(distinct, distinct.endsWith("ORDER BY 1, 2 OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY"));
 	}
 
 	@Test
@@ -1097,6 +1163,31 @@ public class KingbaseCompatibilityTest {
 
 		executor.setArgument(config, statement, 0, java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000"));
 		assertEquals("setObject", call.get());
+
+		jdbcType.set(Types.BIGINT);
+		typeName.set("bigint");
+		executor.setArgument(config, statement, 0, 82001);
+		assertEquals("setObject", call.get());
+		assertArrayEquals(new Object[] {1, "82001", Types.OTHER}, arguments.get());
+
+		executor.setArgument(config, statement, 0, Long.MAX_VALUE);
+		assertEquals("setObject", call.get());
+		assertArrayEquals(new Object[] {1, Long.toString(Long.MAX_VALUE), Types.OTHER}, arguments.get());
+
+		executor.setArgument(config(SQLConfig.DATABASE_SQLSERVER), statement, 0, 82001);
+		assertEquals("setObject", call.get());
+		assertArrayEquals(new Object[] {1, 82001}, arguments.get());
+
+		typeName.set("int8");
+		executor.setArgument(config, statement, 0, 82001L);
+		assertEquals("setObject", call.get());
+		assertArrayEquals(new Object[] {1, 82001L}, arguments.get());
+
+		jdbcType.set(Types.INTEGER);
+		typeName.set("int4");
+		executor.setArgument(config, statement, 0, 82001);
+		assertEquals("setObject", call.get());
+		assertArrayEquals(new Object[] {1, 82001}, arguments.get());
 	}
 
 	@Test
@@ -1594,18 +1685,12 @@ public class KingbaseCompatibilityTest {
 	}
 
 	@Test
-	public void rowversionPredicatesBindCanonicalHexAndRejectInvalidTokens() throws Exception {
+	public void rowversionPredicatesCompareTypedHexAndRejectInvalidTokens() throws Exception {
 		String token = "0x000000000000001B";
+		String encoded = java.util.Base64.getEncoder().encodeToString(
+				token.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 		for (String key : Arrays.asList("v", "v!"))
-			for (String value :
-					Arrays.asList(
-							token,
-							"base64:"
-									+ java.util.Base64.getEncoder()
-											.encodeToString(
-													token.getBytes(
-															java.nio.charset.StandardCharsets
-																	.US_ASCII)))) {
+			for (String value : Arrays.asList(token, encoded, "base64:" + encoded)) {
 				Map<String, Object> request = new LinkedHashMap<>();
 				request.put("@database", "KINGBASE_AUTO");
 				request.put("@cast", key + ":ROWVERSION");
@@ -1620,9 +1705,8 @@ public class KingbaseCompatibilityTest {
 								false,
 								callback("KINGBASE_SQLSERVER"));
 				String sql = cfg.gainSQL(true);
-				assertTrue(sql, sql.contains("lower(cast("));
-				assertFalse(sql, sql.contains("AS BYTEA"));
-				assertEquals(Arrays.asList("0x000000000000001b"), cfg.getPreparedValueList());
+				assertTrue(sql, sql.contains("CAST(0x000000000000001b AS ROWVERSION)"));
+				assertTrue(cfg.getPreparedValueList().isEmpty());
 				assertTrue(sql, sql.contains(key.endsWith("!") ? " != " : " = "));
 			}
 		for (String invalid : Arrays.asList("base64:!", "0x123", "0x000000000000001b' OR 1=1")) {

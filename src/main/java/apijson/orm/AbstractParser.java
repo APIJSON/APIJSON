@@ -683,16 +683,26 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 		}
 
 		if (isNeedVerifyRole()) {
-			if (config.getRole() == null) {
-				if (globalRole != null) {
-					config.setRole(globalRole);
-				} else {
-					config.setRole(getVisitor().getId() == null ? AbstractVerifier.UNKNOWN : AbstractVerifier.LOGIN);
+			verifyConfigRole(config);
+			if (config.getJoinList() != null && !config.getJoinList().isEmpty() && config.isKingBaseSQLServer()) {
+				// Verify the joined rows before SQL generation and before caching any child results.
+				for (Join<T, M, L> join : config.getJoinList()) {
+					SQLConfig<T, M, L> child = join.getJoinConfig();
+					SQLConfig<T, M, L> cache = join.getCacheConfig();
+					if (child != null && child.isKingBaseSQLServer()) verifyConfigRole(child);
+					if (cache != null && cache != child && cache.isKingBaseSQLServer()) verifyConfigRole(cache);
 				}
 			}
-			getVerifier().verifyAccess(config);
 		}
 
+	}
+
+	private void verifyConfigRole(SQLConfig<T, M, L> config) throws Exception {
+		if (config.getRole() == null) {
+			config.setRole(globalRole != null ? globalRole
+					: getVisitor().getId() == null ? AbstractVerifier.UNKNOWN : AbstractVerifier.LOGIN);
+		}
+		getVerifier().verifyAccess(config);
 	}
 
 

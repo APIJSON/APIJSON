@@ -96,13 +96,14 @@ final class KingbaseTypeSupport {
 	static String rowversionPredicateInput(Object value) {
 		if (!(value instanceof String))
 			throw new IllegalArgumentException(
-					"ROWVERSION predicate requires hexadecimal text or base64: output");
+					"ROWVERSION predicate requires hexadecimal text or Base64 output");
 		String text = (String) value;
-		if (text.startsWith("base64:")) {
+		if (!text.regionMatches(true, 0, "0x", 0, 2)) {
+			String encoded = text.startsWith("base64:") ? text.substring(7) : text;
 			try {
 				text =
 						new String(
-								Base64.getDecoder().decode(text.substring(7)),
+								Base64.getDecoder().decode(encoded),
 								java.nio.charset.StandardCharsets.US_ASCII);
 			} catch (IllegalArgumentException e) {
 				throw new IllegalArgumentException("Invalid Base64 ROWVERSION predicate", e);

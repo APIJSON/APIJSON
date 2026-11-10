@@ -149,20 +149,38 @@ public class KingbaseSemanticsRegressionTest {
 	}
 
 	@Test
+	public void kingbaseSqlServerMovesOnlyUngroupedScalarHaving() throws Exception {
+		for (String database : Arrays.asList("KINGBASE_SQLSERVER", "SQLSERVER")) {
+			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c = config(database);
+			c.setColumn(Arrays.asList("id", "length(name):n"));
+			c.setHaving(Collections.<String, Object>singletonMap("h", "length(name)>3"));
+			String sql = c.gainSQL(true);
+			assertEquals(sql, "SQLSERVER".equals(database), sql.contains(" HAVING "));
+			if ("KINGBASE_SQLSERVER".equals(database)) assertTrue(sql, sql.contains(" WHERE "));
+			c.setColumn(Arrays.asList("name", "count(id):n"));
+			c.setGroup("name");
+			assertTrue(c.gainSQL(true).contains(" HAVING "));
+			c.setGroup("");
+			c.setColumn(Collections.singletonList("count(id):n"));
+			c.setHaving(Collections.<String, Object>singletonMap("h", "count(id)>3"));
+			assertTrue(c.gainSQL(true).contains(" HAVING "));
+		}
+	}
+
+	@Test
 	public void regexAdaptationKeepsNativeSqlServerUnchanged() {
 		AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c = config("SQLSERVER");
 		c.setPrepared(true);
 		assertEquals("\"name\" REGEXP BINARY ?", c.gainRegExpString("name", "name", "A.*", false));
 		assertEquals("\"name\" REGEXP ?", c.gainRegExpString("name", "name", "A.*", true));
 		assertEquals(Arrays.asList("A.*", "A.*"), c.getPreparedValueList());
-		assertTrue(
-				config("KINGBASE_SQLSERVER")
-						.gainRegExpString("name", "name", "A.*", false)
-						.contains(" ~ "));
-		assertTrue(
-				config("KINGBASE_SQLSERVER")
-						.gainRegExpString("name", "name", "A.*", true)
-						.contains(" ~* "));
+		c = config("KINGBASE_SQLSERVER");
+		c.setPrepared(true);
+		assertEquals(
+				"(CASE WHEN \"name\" IS NOT NULL THEN pg_catalog.regexp_match(\"name\", ?, 'c') IS NOT NULL END)",
+				c.gainRegExpString("name", "name", "A.*", false));
+		assertEquals("\"name\" ~* ?", c.gainRegExpString("name", "name", "A.*", true));
+		assertEquals(Arrays.asList("A.*", "A.*"), c.getPreparedValueList());
 	}
 
 	@Test

@@ -1024,7 +1024,12 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			SQLConfig<T, M, L> on = join.getOnConfig();
 			SQLConfig<T, M, L> projected = on == null || on.getColumn() == null ? join.getJoinConfig() : on;
 			if (projected == null) return null;
-			owners.add(join); widths.add(projectionWidth(projected));
+			int width = projectionWidth(projected);
+			if (width >= 0 && (on == null || on.getColumn() == null) && config.isKingBaseSQLServer()
+					&& config instanceof AbstractSQLConfig) {
+				width += ((AbstractSQLConfig<?, ?, ?>) config).gainKingbaseSQLServerHiddenJoinKeys(join).size();
+			}
+			owners.add(join); widths.add(width);
 		}
 		int length = md.getColumnCount();
 		int known = 0, wildcard = -1;
@@ -1125,7 +1130,9 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	protected boolean isHideColumn(@NotNull SQLConfig<T, M, L> config, @NotNull ResultSet rs, @NotNull ResultSetMetaData rsmd
 			, final int row, @NotNull M table, final int columnIndex, Map<String, M> childMap
 			, Map<String, String> keyMap) throws SQLException {
-		return rsmd.getColumnName(columnIndex).startsWith("_");
+		return rsmd.getColumnName(columnIndex).startsWith("_")
+				|| (config.isKingBaseSQLServer() && rsmd.getColumnLabel(columnIndex)
+						.startsWith(AbstractSQLConfig.KINGBASE_SQLSERVER_JOIN_KEY_PREFIX));
 	}
 
 	/**
@@ -1209,7 +1216,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		String key = rsmd.getColumnLabel(columnIndex);  // dotIndex < 0 ? label : label.substring(dotIndex + 1);
 		sqlResultDuration += System.currentTimeMillis() - startTime;
 
-		key = AbstractSQLConfig.restoreKingbaseMySQLProjectionLabel(config, key);
+		key = AbstractSQLConfig.restoreKingbaseProjectionLabel(config, key);
 
 		if (config.isHive()) {
 			String tableName = config.getTable();
@@ -2023,6 +2030,12 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			// Kingbase JDBC may defer parameter metadata until execution.
 		}
 
+		// Kingbase SQL Server bigint is distinct from the driver's int8.
+		if (jdbcType == Types.BIGINT && "bigint".equals(typeName)
+				&& (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte)) {
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
+			return;
+		}
 		if (value == null) {
 			if (jdbcType == Types.NULL || jdbcType == 0 || jdbcType == Types.OTHER && typeName.isEmpty()) {
 				statement.setObject(parameterIndex, null);

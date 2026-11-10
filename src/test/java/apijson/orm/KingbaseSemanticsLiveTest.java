@@ -118,4 +118,46 @@ public class KingbaseSemanticsLiveTest {
 			assertDateFormat(connection, "KINGBASE_SQLSERVER");
 		}
 	}
+
+	@Test
+	public void kingbaseSqlServerJsonLengthUsesSameSemanticsInProjectionAndCondition() throws Exception {
+		try (Connection connection = connect("KINGBASE_SQLSERVER")) {
+			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
+					KingbaseSemanticsRegressionTest.config("KINGBASE_SQLSERVER");
+			c.setPrepared(true);
+			String[] documents = {"[]", "{}", "[1,2,3]", "{\"a\":1,\"b\":[]}", "42", "null", null};
+			Integer[] lengths = {0, 0, 3, 2, 1, 1, null};
+			for (int i = 0; i < documents.length; i++) {
+				String input = " FROM (SELECT CAST(? AS VARCHAR(128)) AS \"doc\") AS fixture";
+				String expression = c.parseSQLExpression("@column", "json_length(doc)", false, false);
+				List<Object> params = Collections.<Object>singletonList(documents[i]);
+				assertEquals(documents[i], lengths[i], scalar(connection, "SELECT " + expression + input, params));
+				assertEquals(documents[i], lengths[i], scalar(connection, "SELECT " + c.gainKey("doc{") + input, params));
+			}
+			c.setPreparedValueList(new ArrayList<>());
+			String bound = c.parseSQLExpression("@column", "json_length('[1,2]')", false, false);
+			assertEquals(Collections.singletonList("[1,2]"), c.getPreparedValueList());
+			assertEquals(2, scalar(connection, "SELECT " + bound, c.getPreparedValueList()));
+		}
+	}
+
+	@Test
+	public void kingbaseSqlServerRegexPreservesCaseAndNull() throws Exception {
+		try (Connection connection = connect("KINGBASE_SQLSERVER")) {
+			AbstractSQLConfig<Long, Map<String, Object>, List<Object>> c =
+					KingbaseSemanticsRegressionTest.config("KINGBASE_SQLSERVER");
+			for (boolean ignoreCase : Arrays.asList(false, true)) {
+				c.setPrepared(true);
+				c.setPreparedValueList(new ArrayList<>());
+				String expression = c.gainRegExpString("name", "name", "a", ignoreCase);
+				String sql = "SELECT " + expression + " FROM (SELECT CAST(? AS VARCHAR(16)) AS \"name\") AS fixture";
+				for (String target : Arrays.asList("a", "A", "b", null)) {
+					List<Object> params = new ArrayList<>(c.getPreparedValueList());
+					params.add(target);
+					Boolean expected = target == null ? null : "a".equals(target) || (ignoreCase && "A".equals(target));
+					assertEquals(target, expected, scalar(connection, sql, params));
+				}
+			}
+		}
+	}
 }
