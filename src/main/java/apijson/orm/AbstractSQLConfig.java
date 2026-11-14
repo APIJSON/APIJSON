@@ -5221,6 +5221,16 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			return explain + gainOraclePageSQL(sql);
 		}
 
+		// 分组后的 HEAD 要统计组数，不是组内数量，和 Oracle 分支一样用 count(*) 包一层。
+		// 原 SQL 为 count(*) ... GROUP BY ... ，返回多行组内数量，和 total 语义不符。
+		// MySQL 等要求 FROM 的子查询必须有别名。
+		if (StringUtil.isNotEmpty(getGroup(), true) && RequestMethod.isHeadMethod(getMethod(), true)) {
+			String sql = "SELECT " + (getCache() == JSONMap.CACHE_RAM ? "SQL_NO_CACHE " : "")
+					+ column + " FROM " + gainConditionString(tablePath, this);
+			return explain + "SELECT count(*)" + gainAs() + getQuote() + JSONResponse.KEY_COUNT + getQuote()
+					+ " FROM (" + sql + ")" + gainAs() + gainSQLAliasWithQuote();
+		}
+
 		String cSql = "SELECT " + (getCache() == JSONMap.CACHE_RAM ? "SQL_NO_CACHE " : "")
 				+ column + " FROM " + gainConditionString(tablePath, this) + gainLimitString();
 		cSql = buildWithAsExprSql(this, cSql);
