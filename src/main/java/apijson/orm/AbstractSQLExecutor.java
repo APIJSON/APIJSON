@@ -1094,7 +1094,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			jdbcType = rsmd.getColumnType(columnIndex);
 			typeName = rsmd.getColumnTypeName(columnIndex);
 		}
-		catch (SQLException e) {
+		catch (SQLException | UnsupportedOperationException e) {
 			// Some JDBC bridges do not expose complete metadata. Value-class mapping
 			// still provides a safe fallback in that case.
 			Log.e(TAG, "getValue failed to read JDBC metadata for column " + label + ": " + e.getMessage());

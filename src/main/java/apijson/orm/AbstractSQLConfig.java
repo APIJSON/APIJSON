@@ -179,6 +179,8 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		DATABASE_LIST.add(DATABASE_MONGODB);
 		DATABASE_LIST.add(DATABASE_CASSANDRA);
 		DATABASE_LIST.add(DATABASE_KAFKA);
+		DATABASE_LIST.add(DATABASE_SQLITE);
+		DATABASE_LIST.add(DATABASE_TURSO);
 		DATABASE_LIST.add(DATABASE_MQ);
 		DATABASE_LIST.add(DATABASE_DUCKDB);
 		DATABASE_LIST.add(DATABASE_SURREALDB);
@@ -1382,6 +1384,14 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	}
 	public static boolean isSQLite(String db) {
 		return DATABASE_SQLITE.equals(db);
+	}
+
+	@Override
+	public boolean isTurso() {
+		return isTurso(gainSQLDatabase());
+	}
+	public static boolean isTurso(String db) {
+		return DATABASE_TURSO.equals(db);
 	}
 
 	@Override

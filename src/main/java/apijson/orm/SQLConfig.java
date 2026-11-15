@@ -52,6 +52,7 @@ public interface SQLConfig<T, M extends Map<String, Object>, L extends List<Obje
 	String DATABASE_MONGODB = "MONGODB"; // https://www.mongodb.com/docs/atlas/data-federation/query/query-with-sql
 	String DATABASE_KAFKA = "KAFKA"; // https://github.com/APIJSON/APIJSON-Demo/tree/master/APIJSON-Java-Server/APIJSONDemo-MultiDataSource-Kafka
 	String DATABASE_SQLITE = "SQLITE"; // https://www.sqlite.org
+	String DATABASE_TURSO = "TURSO"; // https://docs.turso.tech/connect/java
 	String DATABASE_DUCKDB = "DUCKDB"; // https://duckdb.org
 	String DATABASE_SURREALDB = "SURREALDB"; // https://surrealdb.com
 	String DATABASE_OPENGAUSS = "OPENGAUSS"; // https://opengauss.org
@@ -122,6 +123,7 @@ public interface SQLConfig<T, M extends Map<String, Object>, L extends List<Obje
 	boolean isKafka();
 	boolean isMQ();
 	boolean isSQLite();
+	boolean isTurso();
 	boolean isDuckDB();
 	boolean isSurrealDB();
 	boolean isOpenGauss();

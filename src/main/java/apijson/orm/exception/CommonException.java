@@ -247,6 +247,9 @@ public class CommonException extends Exception {
         else if (config.isSQLite()) {
           db = SQLConfig.DATABASE_SQLITE + " " + dbVersion;
         }
+        else if (config.isTurso()) {
+          db = SQLConfig.DATABASE_TURSO + " " + dbVersion;
+        }
         else if (config.isHive()) {
           db = SQLConfig.DATABASE_HIVE + " " + dbVersion;
         }
