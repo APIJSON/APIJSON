@@ -1106,6 +1106,8 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 			config.setParser(this);
 			config.setPrepared(false);
 			config.setColumn(Arrays.asList("structure"));
+			// Only the three compatibility modes opt into TEXT/CLOB-backed rules.
+			if (config.isKingBaseCompatibilityMode()) config.setJson(Arrays.asList("structure"));
 
 			Map<String, Object> where = new HashMap<String, Object>();
 			where.put("method", method);
@@ -1126,7 +1128,10 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 			//			AbstractVerifier.REQUEST_MAP.put(cacheKey, versionedMap);
 		}
 
-		return JSON.get(result, "structure"); //解决返回值套了一层 "structure":{}
+		// Legacy KINGBASE and native databases keep the original cached-rule contract.
+		Object structure = result == null ? null : result.get("structure");
+		return structure instanceof String && createSQLConfig().isKingBaseCompatibilityMode()
+				? JSON.parseObject(structure) : (M) structure;
 	}
 
 
