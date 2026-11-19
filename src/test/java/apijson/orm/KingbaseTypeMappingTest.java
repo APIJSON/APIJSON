@@ -296,12 +296,21 @@ public class KingbaseTypeMappingTest {
 	public void realDriverArraysBindTextWithoutBinaryArrayCorruption() throws Exception {
 		requireDriver();
 		Class<?> base = Class.forName("com.kingbase8.core.BaseConnection");
+		Object typeInfo = proxy(Class.forName("com.kingbase8.core.TypeInfo"), (instance, method, arguments) -> {
+			assertEquals("isCollection", method.getName());
+			assertEquals(1000, arguments[0]);
+			return false;
+		});
+		Object connection = proxy(base, (instance, method, arguments) -> {
+			assertEquals("getTypeInfo", method.getName());
+			return typeInfo;
+		});
 		for (String mode : MODES) {
 			java.sql.Array array =
 					(java.sql.Array)
 							Class.forName("com.kingbase8.jdbc.KbArray")
 									.getConstructor(base, int.class, String.class)
-									.newInstance(null, 1000, "{t,f,NULL}");
+									.newInstance(connection, 1000, "{t,f,NULL}");
 			List<Object[]> calls = new ArrayList<>();
 			PreparedStatement statement =
 					proxy(

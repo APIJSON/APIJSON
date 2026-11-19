@@ -18,6 +18,7 @@
 		<maven.compiler.encoding>UTF-8</maven.compiler.encoding>
 		<maven.compiler.source>1.8</maven.compiler.source>
 		<maven.compiler.target>1.8</maven.compiler.target>
+		<kingbase.jdbc.version>9.0.0</kingbase.jdbc.version>
 	</properties>
 
 	<dependencies>
@@ -37,7 +38,7 @@
 				<dependency>
 					<groupId>cn.com.kingbase</groupId>
 					<artifactId>kingbase8</artifactId>
-					<version>9.0.0</version>
+					<version>${kingbase.jdbc.version}</version>
 					<scope>test</scope>
 				</dependency>
 			</dependencies>
