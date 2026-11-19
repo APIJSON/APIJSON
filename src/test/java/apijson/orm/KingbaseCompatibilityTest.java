@@ -924,7 +924,8 @@ public class KingbaseCompatibilityTest {
 		c.setCount(3).setColumn(Arrays.asList("count(id):total"));
 		String aggregate = c.gainSQL(true);
 		assertFalse(aggregate, aggregate.contains("ORDER BY"));
-		assertTrue(aggregate, aggregate.endsWith("OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY"));
+		assertFalse(aggregate, aggregate.contains("OFFSET"));
+		assertFalse(aggregate, aggregate.contains("FETCH"));
 
 		c.setDistinct(true).setColumn(Arrays.asList("name", "age"));
 		String distinct = c.gainSQL(true);
