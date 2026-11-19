@@ -397,6 +397,14 @@ DELETE: <br > 删除数据 | base_url/delete/ | {<br > &nbsp;&nbsp; TableName:{<
 <br >
 
 ### <h3 id="3.2">3.2 功能符<h3/>
+
+#### KingbaseES 接入与迁移
+
+- 使用 MySQL、Oracle 或 SQL Server 兼容模式时，将 `@database` 或后端 `DEFAULT_DATABASE` 配置为 `KINGBASE_AUTO`，并由应用提供运行时 Kingbase JDBC 驱动。APIJSON 使用 `SHOW database_mode` 识别模式，并缓存数据源的识别结果。
+- 从 `KINGBASE_MYSQL`、`KINGBASE_ORACLE` 或 `KINGBASE_SQLSERVER` 直接配置迁移时，请改为 `KINGBASE_AUTO`。这三个标识仍可用于后端 `gainKingbaseExpectedDatabase()` 的期望模式校验，但不再作为直接配置值。原有 `KINGBASE` 入口保留旧行为，不自动探测模式。
+- 自管数据源可覆盖 `openKingbaseModeConnection()`，返回可由探测器关闭的连接。探测连接和缓存键不能依赖已解析的 SQL 方言；如果同一数据源切换目标实例，请使用 `KINGBASE_MODE_RESOLVER.invalidate(config)` 清除旧的模式缓存。
+
+默认 Maven 测试不需要 Kingbase 驱动。要单独验证 JDBC 驱动合约，可运行 `mvn -Pkingbase-driver-tests -Dtest=KingbaseTypeMappingTest test`，按需要通过 `-Dkingbase.jdbc.version` 指定可从 Maven 仓库获取的驱动版本。这不等同于实库测试。
  
  功能 | 键值对格式 | 使用示例
 ------------ | ------------ | ------------
