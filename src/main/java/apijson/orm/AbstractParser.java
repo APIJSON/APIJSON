@@ -1692,6 +1692,11 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 			}
 
 			boolean isAppJoin = "@".equals(joinType);
+			String joinDatabase = getString(tableObj, KEY_DATABASE);
+			if (joinDatabase == null) joinDatabase = getString(request, KEY_DATABASE);
+			if (joinDatabase == null) joinDatabase = getGlobalDatabase();
+			if (joinDatabase == null) joinDatabase = AbstractSQLConfig.DEFAULT_DATABASE;
+			boolean copyJoinJson = SQLConfig.DATABASE_KINGBASE_AUTO.equals(joinDatabase);
 
 			M refObj = JSON.createJSONObject();
 
@@ -1773,7 +1778,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 				}
 
 				if (k.startsWith("@")) {
-					if (JOIN_COPY_KEY_LIST.contains(k)) {
+					if (JOIN_COPY_KEY_LIST.contains(k) || (copyJoinJson && KEY_JSON.equals(k))) {
 						requestObj.put(k, v); // 保留
 					}
 				}
