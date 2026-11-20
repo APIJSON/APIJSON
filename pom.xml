@@ -18,6 +18,7 @@
 		<maven.compiler.encoding>UTF-8</maven.compiler.encoding>
 		<maven.compiler.source>1.8</maven.compiler.source>
 		<maven.compiler.target>1.8</maven.compiler.target>
+		<kingbase.jdbc.version>9.0.0</kingbase.jdbc.version>
 	</properties>
 
 	<dependencies>
@@ -28,6 +29,21 @@
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
+
+	<!-- Optional real-driver contract tests; the ORM has no production driver dependency. -->
+	<profiles>
+		<profile>
+			<id>kingbase-driver-tests</id>
+			<dependencies>
+				<dependency>
+					<groupId>cn.com.kingbase</groupId>
+					<artifactId>kingbase8</artifactId>
+					<version>${kingbase.jdbc.version}</version>
+					<scope>test</scope>
+				</dependency>
+			</dependencies>
+		</profile>
+	</profiles>
 
 	<build>
 		<plugins>
