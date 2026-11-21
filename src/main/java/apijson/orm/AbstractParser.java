@@ -684,13 +684,19 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 
 		if (isNeedVerifyRole()) {
 			verifyConfigRole(config);
-			if (config.getJoinList() != null && !config.getJoinList().isEmpty() && config.isKingBaseSQLServer()) {
+			List<Join> jl = config.getJoinList();
+			if (jl != null) {
 				// Verify the joined rows before SQL generation and before caching any child results.
-				for (Join<T, M, L> join : config.getJoinList()) {
+				for (Join<T, M, L> join : jl) {
 					SQLConfig<T, M, L> child = join.getJoinConfig();
+					if (child != null) { //  && child.isKingBaseSQLServer() {
+						verifyConfigRole(child);
+					}
+					
 					SQLConfig<T, M, L> cache = join.getCacheConfig();
-					if (child != null && child.isKingBaseSQLServer()) verifyConfigRole(child);
-					if (cache != null && cache != child && cache.isKingBaseSQLServer()) verifyConfigRole(cache);
+					if (cache != null && cache != child) { //  && cache.isKingBaseSQLServer() {
+						verifyConfigRole(cache);
+					}
 				}
 			}
 		}
@@ -699,8 +705,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 
 	private void verifyConfigRole(SQLConfig<T, M, L> config) throws Exception {
 		if (config.getRole() == null) {
-			config.setRole(globalRole != null ? globalRole
-					: getVisitor().getId() == null ? AbstractVerifier.UNKNOWN : AbstractVerifier.LOGIN);
+			config.setRole(globalRole != null ? globalRole : (getVisitor().getId() == null ? AbstractVerifier.UNKNOWN : AbstractVerifier.LOGIN));
 		}
 		getVerifier().verifyAccess(config);
 	}
@@ -1117,7 +1122,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 			config.setPrepared(false);
 			config.setColumn(Arrays.asList("structure"));
 			// Only the three compatibility modes opt into TEXT/CLOB-backed rules.
-			if (config.isKingBaseCompatibilityMode()) config.setJson(Arrays.asList("structure"));
+			config.setJson(Arrays.asList("structure"));
 
 			Map<String, Object> where = new HashMap<String, Object>();
 			where.put("method", method);
@@ -1140,8 +1145,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 
 		// Legacy KINGBASE and native databases keep the original cached-rule contract.
 		Object structure = result == null ? null : result.get("structure");
-		return structure instanceof String && createSQLConfig().isKingBaseCompatibilityMode()
-				? JSON.parseObject(structure) : (M) structure;
+		return structure instanceof String ? JSON.parseObject(structure) : (M) structure;
 	}
 
 
@@ -1549,6 +1553,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 		JOIN_COPY_KEY_LIST.add(KEY_ORDER);
 		JOIN_COPY_KEY_LIST.add(KEY_KEY);
 		JOIN_COPY_KEY_LIST.add(KEY_RAW);
+		JOIN_COPY_KEY_LIST.add(KEY_JSON);
 	}
 
 	/**JOIN 多表同时筛选
@@ -1692,11 +1697,18 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 			}
 
 			boolean isAppJoin = "@".equals(joinType);
-			String joinDatabase = getString(tableObj, KEY_DATABASE);
-			if (joinDatabase == null) joinDatabase = getString(request, KEY_DATABASE);
-			if (joinDatabase == null) joinDatabase = getGlobalDatabase();
-			if (joinDatabase == null) joinDatabase = AbstractSQLConfig.DEFAULT_DATABASE;
-			boolean copyJoinJson = SQLConfig.DATABASE_KINGBASE_AUTO.equals(joinDatabase);
+			// String joinDatabase = getString(tableObj, KEY_DATABASE);
+			// if (joinDatabase == null) {
+			// 	joinDatabase = getString(request, KEY_DATABASE);
+			// 	if (joinDatabase == null) {
+			// 		joinDatabase = getGlobalDatabase();
+			// 		if (joinDatabase == null) {
+			// 			joinDatabase = AbstractSQLConfig.DEFAULT_DATABASE;
+			// 		}
+			// 	}
+			// }
+			
+			// boolean copyJoinJson = SQLConfig.DATABASE_KINGBASE_AUTO.equals(joinDatabase);
 
 			M refObj = JSON.createJSONObject();
 
@@ -1778,7 +1790,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 				}
 
 				if (k.startsWith("@")) {
-					if (JOIN_COPY_KEY_LIST.contains(k) || (copyJoinJson && KEY_JSON.equals(k))) {
+					if (JOIN_COPY_KEY_LIST.contains(k)) { // 直接 JOIN_COPY_KEY_LIST.add(KEY_JSON)  || (copyJoinJson && KEY_JSON.equals(k))) {
 						requestObj.put(k, v); // 保留
 					}
 				}
