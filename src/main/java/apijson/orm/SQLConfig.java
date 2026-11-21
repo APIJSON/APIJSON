@@ -29,9 +29,9 @@ public interface SQLConfig<T, M extends Map<String, Object>, L extends List<Obje
 	String DATABASE_KINGBASE_AUTO = "KINGBASE_AUTO"; // Configuration entry: detect the server mode for this data source
 	String DATABASE_KINGBASE = "KINGBASE"; // Legacy behavior without detection; new integrations use KINGBASE_AUTO
 	// Internal dialect / backend expectation identifiers, never @database or DEFAULT_DATABASE values.
-	String DATABASE_KINGBASE_MYSQL = "KINGBASE_MYSQL";
-	String DATABASE_KINGBASE_ORACLE = "KINGBASE_ORACLE";
-	String DATABASE_KINGBASE_SQLSERVER = "KINGBASE_SQLSERVER";
+	String DATABASE_KINGBASE_MYSQL = "KINGBASE_MYSQL"; // Kingbase in MySQL compatibility mode
+	String DATABASE_KINGBASE_ORACLE = "KINGBASE_ORACLE"; // Kingbase in Oracle compatibility mode
+	String DATABASE_KINGBASE_SQLSERVER = "KINGBASE_SQLSERVER"; // Kingbase in SQLServer compatibility mode
 	String DATABASE_ELASTICSEARCH = "ELASTICSEARCH"; // https://www.elastic.co/guide/en/elasticsearch/reference/7.4/xpack-sql.html
 	String DATABASE_MANTICORE = "MANTICORE"; // https://manticoresearch.com
 	String DATABASE_CLICKHOUSE = "CLICKHOUSE"; // https://clickhouse.com
@@ -100,6 +100,7 @@ public interface SQLConfig<T, M extends Map<String, Object>, L extends List<Obje
 	boolean isTiDB();
 	boolean isCockroachDB();
 	boolean isDameng();
+	
 	/** Original KINGBASE identifier; the three compatibility modes have separate predicates. */
 	boolean isKingBase();
 	/** Only resolved Kingbase compatibility modes enable the adaptation. */
@@ -107,9 +108,16 @@ public interface SQLConfig<T, M extends Map<String, Object>, L extends List<Obje
 		return isKingBaseMySQL() || isKingBaseOracle() || isKingBaseSQLServer();
 	}
 	// Existing native SQLConfig implementations predate the three-mode extension.
-	default boolean isKingBaseMySQL() { return false; }
-	default boolean isKingBaseOracle() { return false; }
-	default boolean isKingBaseSQLServer() { return false; }
+	default boolean isKingBaseMySQL() { 
+		return false; 
+	}
+	default boolean isKingBaseOracle() { 
+		return false; 
+	}
+	default boolean isKingBaseSQLServer() { 
+		return false; 
+	}
+	
 	boolean isElasticsearch();
 	boolean isManticore();
 	boolean isClickHouse();
