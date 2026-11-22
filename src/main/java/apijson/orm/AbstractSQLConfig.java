@@ -1123,9 +1123,8 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	}
     /** Validate a resolved backend/default database against the public configuration allowlist. */
     public static void validateConfiguredDatabase(String database) {
-        if (!DATABASE_LIST.contains(database)) {
-            throw new IllegalArgumentException("Unsupported database configuration: " + database
-                    + "; allowed values: " + DATABASE_LIST);
+        if (! DATABASE_LIST.contains(database)) {
+            throw new IllegalArgumentException("Unsupported database configuration: " + database + "; allowed values: " + DATABASE_LIST);
         }
     }
 	/**
@@ -1140,11 +1139,10 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
     /** Resolve a configured route, including routes supplied by framework configuration stores. */
     protected String resolveSQLDatabase(String db) {
 		db = db == null ? DEFAULT_DATABASE : db;
-		if (DATABASE_KINGBASE_AUTO.equals(db)
-				|| (KingbaseSQLDialect.from(db).isKingbase() && !DATABASE_KINGBASE.equals(db))) {
+		if (DATABASE_KINGBASE_AUTO.equals(db) || (KingbaseSQLDialect.from(db).isKingbase() && ! DATABASE_KINGBASE.equals(db))) {
 			validateConfiguredDatabase(db);
 		}
-		if (!KingbaseModeResolver.requiresDetection(db)) {
+		if (! KingbaseModeResolver.requiresDetection(db)) {
 			return db;
 		}
 		String actual = KINGBASE_MODE_RESOLVER.resolve(this);
@@ -1629,8 +1627,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		// return DATABASE_POSTGRESQL.equals(getDatabase()) ? t.toLowerCase() : t;
 		String ot = getTable();
 		String nt = TABLE_KEY_MAP.get(ot);
-		if ((isKingBaseSQLServer() || isKingBaseOracle())
-				&& (StringUtil.isEmpty(nt) || Objects.equals(ot, nt))) {
+		if ((isKingBaseSQLServer() || isKingBaseOracle()) && (StringUtil.isEmpty(nt) || Objects.equals(ot, nt))) {
 			if (Table.class.getSimpleName().equals(ot)) {
 				nt = Table.TABLE_NAME;
 			}
@@ -1793,10 +1790,11 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			String key = StringUtil.trim(item);
 			int alias = KingbaseMySQLExpressions.aliasIndex(key);
 			if (alias >= 0) key = key.substring(0, alias);
-			if (key.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+			if (key.matches("[A-Za-z_][A-Za-z0-9_]*")) { // TODO static final PATTERN_KINGBASE_KEYWORD = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*") 
 				selectedGroup = StringUtil.concat(selectedGroup, gainKey(key), ", ", true);
-			} else if (key.contains("(") && !KingbaseMySQLExpressions.hasAggregateOrWindow(key, SQL_AGGREGATE_FUNCTION_MAP.keySet())
-					&& !KingbaseMySQLExpressions.hasVolatileFunction(key)) {
+			} else if (key.contains("(") && ! ( KingbaseMySQLExpressions.hasAggregateOrWindow(key, SQL_AGGREGATE_FUNCTION_MAP.keySet())
+					|| KingbaseMySQLExpressions.hasVolatileFunction(key) )
+			) {
 				// A repeated bound expression has different parameter identities ($1/$2)
 				// and is not an equal GROUP BY expression. Reference its validated SELECT
 				// position instead, without duplicating arguments or evaluating it again.
@@ -1899,9 +1897,11 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			throw new UnsupportedOperationException("@having:value 的 value 中字符串 " + expression + " 不合法！"
 					+ "不允许传超过 100 个字符的函数或表达式！请用 @raw 简化传参！");
 		}
-		if (isKingBaseMySQL() && columnAliasExpressionMap != null && !columnAliasExpressionMap.isEmpty()) {
+		if (columnAliasExpressionMap != null && (! columnAliasExpressionMap.isEmpty()) && isKingBaseMySQL()) {
 			String comparison = KingbaseHavingExpression.parse(expression, columnAliasExpressionMap.keySet(), quote);
-			if (comparison != null) return comparison;
+			if (comparison != null) {
+				return comparison;
+			}
 		}
 
 		int start = expression.indexOf("(");
@@ -1937,10 +1937,10 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			}
 		}
 
-		if (isKingBaseSQLServer() && !containRaw && "json_length".equalsIgnoreCase(method)) {
+		if (containRaw == false && "json_length".equalsIgnoreCase(method) && isKingBaseSQLServer()) {
 			return parseSQLExpression(KEY_HAVING, expression, false, false, null);
 		}
-		if (isKingBaseOracle() && !containRaw) {
+		if (containRaw == false && isKingBaseOracle()) {
 			java.util.regex.Matcher length = KINGBASE_JSON_LENGTH_FILTER.matcher(expression);
 			if (length.matches()) {
 				return "jsonb_array_length(CAST(" + gainKingbaseOracleJsonLengthKey(length.group(1)) + " AS jsonb))"
@@ -1951,7 +1951,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		// MATCH(...) AGAINST(...) is a two-part full-text expression. Passing only
 		// the substring beginning with '(' drops the MATCH function name, which
 		// prevents database-specific full-text conversion from recognizing it.
-		if ((isKingBaseCompatibilityMode() && expression.indexOf(")AGAINST(") > start)
+		if ((expression.indexOf(")AGAINST(") > start && isKingBaseCompatibilityMode())
 				|| ("length".equalsIgnoreCase(method) && isKingBaseMySQL())) {
 			return parseSQLExpression(KEY_HAVING, expression, containRaw, false, null);
 		}
@@ -1960,8 +1960,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 
 	private String gainKingbaseOracleJsonLengthKey(String key) {
 		List<String> raw = getRaw();
-		if (column == null || !RequestMethod.isGetMethod(getMethod(), false)
-				|| (raw != null && raw.contains(KEY_COLUMN))) {
+		if (column == null || (! RequestMethod.isGetMethod(getMethod(), false)) || (raw != null && raw.contains(KEY_COLUMN))) {
 			return gainKey(key);
 		}
 
@@ -1970,17 +1969,25 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		String source = null;
 		for (String expression : column) {
 			String[] projections = expression.indexOf('(') < 0 ? StringUtil.split(expression) : new String[] {expression};
-			if (projections == null) continue;
+			if (projections == null) {
+				continue;
+			}
+			
 			for (String projection : projections) {
 				int index = KingbaseMySQLExpressions.aliasIndex(projection);
-				if (index <= 0 || !key.equals(projection.substring(index + 1))) continue;
+				if (index <= 0 || ! key.equals(projection.substring(index + 1))) {
+					continue;
+				}
+				
 				String name = projection.substring(0, index);
-				if (!StringUtil.isName(name) || RAW_MAP.containsKey(name) || (source != null && !source.equals(name))) {
+				if ((! StringUtil.isName(name)) || RAW_MAP.containsKey(name) || (source != null && ! source.equals(name))) {
 					throw new UnsupportedOperationException("Kingbase Oracle json_length HAVING alias must refer to a single column: " + key);
 				}
+				
 				source = name;
 			}
 		}
+		
 		return source == null ? gainKey(key) : gainSQLKey(source);
 	}
 
@@ -2000,13 +2007,13 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	 * Kingbase needs a quoted interval. Keep DATE_ADD/DATE_SUB themselves: their
 	 * DATE, DATETIME and text return rules differ from date +/- interval.
 	 */
-	protected String gainSQLFunctionExpression(String function, String[] args,
-			boolean distinct, String suffix) {
-		if (isKingBaseMySQL() && ("round".equalsIgnoreCase(function) || "sec_to_time".equalsIgnoreCase(function)) && !distinct
-				&& function.equalsIgnoreCase(gainSQLFunction(function))
-				&& args != null && args.length == 1 && "?".equals(args[0])
-				&& !getPreparedValueList().isEmpty()) {
-			Object value = getPreparedValueList().get(getPreparedValueList().size() - 1);
+	protected String gainSQLFunctionExpression(String function, String[] args, boolean distinct, String suffix) {
+		boolean isKingBaseMySQL = isKingBaseMySQL();
+		List<Object> parameters = getPreparedValueList();
+		if (isKingBaseMySQL && (distinct == false && (! parameters.isEmpty()) && args != null && args.length == 1 && "?".equals(args[0])
+			&& ("round".equalsIgnoreCase(function) || "sec_to_time".equalsIgnoreCase(function)) && function.equalsIgnoreCase(gainSQLFunction(function)) 
+		) {
+			Object value = parameters.get(parameters.size() - 1);
 			// Supply the numeric context required by these bound-string overloads.
 			// Keep columns, raw literals, invalid text and two-argument ROUND intact.
 			if (value instanceof String && value.toString().matches("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
@@ -2014,18 +2021,20 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				args = new String[]{"round".equalsIgnoreCase(function) ? "CAST(? AS DOUBLE)" : "CAST(? AS pg_catalog.numeric)"};
 			}
 		}
-		if (isKingBaseMySQL() && args != null && isPrepared()
+		if (isKingBaseMySQL && args != null && isPrepared()
 				&& function.equalsIgnoreCase(gainSQLFunction(function))
 				&& Arrays.asList("concat_ws", "field", "find_in_set", "timestamp", "json_object", "json_set")
 						.contains(function.toLowerCase(Locale.ROOT))) {
 			// Polymorphic functions need TEXT, not the driver's untyped setObject
 			// or VARCHAR binding (FIELD/JSON_SET behave differently for VARCHAR).
 			args = args.clone();
-			List<Object> parameters = getPreparedValueList();
+			
 			int offset = parameters.size() - KingbaseMySQLFunctions.parameterCount(StringUtil.get(args));
 			for (int i = 0; i < args.length; i++) {
 				int count = KingbaseMySQLFunctions.parameterCount(args[i]);
-				if ("?".equals(args[i]) && parameters.get(offset) instanceof String) args[i] = "CAST(? AS text)";
+				if ("?".equals(args[i]) && parameters.get(offset) instanceof String) {
+					args[i] = "CAST(? AS text)";
+				}
 				offset += count;
 			}
 		}
@@ -2040,20 +2049,18 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			// MySQL LENGTH counts bytes. Keep the original function name in the response label.
 			return "octet_length(" + args[0] + ")" + suffix;
 		}
-		if (isKingBaseMySQL() && "json_quote".equalsIgnoreCase(function)
+		if (isKingBaseMySQL && "json_quote".equalsIgnoreCase(function)
 				&& function.equalsIgnoreCase(gainSQLFunction(function))) {
 			// JSON_QUOTE returns SQL text containing JSON, rather than a JSON column.
 			return "CAST(" + gainSQLFunction(function) + "(" + (distinct ? PREFIX_DISTINCT : "")
 					+ StringUtil.get(args) + ") AS text)" + suffix;
 		}
-		if (isKingBaseMySQL() && args != null && args.length == 1
-				&& function.equalsIgnoreCase(gainSQLFunction(function))) {
+		if (isKingBaseMySQL && args != null && args.length == 1 && function.equalsIgnoreCase(gainSQLFunction(function))) {
 			if ("time".equalsIgnoreCase(function) && !distinct && "?".equals(args[0])
-					&& !getPreparedValueList().isEmpty()
-					&& getPreparedValueList().get(getPreparedValueList().size() - 1) instanceof String) {
+					&& ! parameters.isEmpty() && parameters.get(parameters.size() - 1) instanceof String) {
 				// This driver leaves TIME(?) untyped even with setObject(String).
 				String time = gainSQLFunction(function) + "(CAST(? AS varchar))";
-				String input = (String) getPreparedValueList().get(getPreparedValueList().size() - 1);
+				String input = (String) parameters.get(getPreparedValueList().size() - 1);
 				java.util.regex.Matcher fraction = MYSQL_TIME_FRACTION_PATTERN.matcher(input);
 				if (fraction.find()) {
 					// Keep declared fractional digits, including trailing zeros.
@@ -2062,8 +2069,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				return time + suffix;
 			}
 			if ("avg".equalsIgnoreCase(function) && "?".equals(args[0])
-					&& !getPreparedValueList().isEmpty()
-					&& getPreparedValueList().get(getPreparedValueList().size() - 1) instanceof String) {
+					&& ! parameters.isEmpty() && parameters.get(parameters.size() - 1) instanceof String) {
 				// Resolve the bound-string overload, leaving calculation and precision
 				// to the configured Kingbase session rather than emulating MySQL.
 				return gainSQLFunction(function) + "(" + (distinct ? PREFIX_DISTINCT : "")
@@ -2079,7 +2085,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 			return "to_char(to_timestamp(CAST(" + args[0]
 					+ " AS varchar), 'YYYY-MM-DD HH24:MI:SS.US'), " + format + ")" + suffix;
 		}
-		if (isKingBaseMySQL() == false
+		if (isKingBaseMySQL == false
 				|| ("date_add".equalsIgnoreCase(function) == false
 				&& "date_sub".equalsIgnoreCase(function) == false)
 				|| distinct || args == null || args.length != 2) {
