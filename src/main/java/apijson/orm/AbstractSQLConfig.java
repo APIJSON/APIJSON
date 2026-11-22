@@ -2688,7 +2688,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				// Only the detected Kingbase modes inherit the vice-table order here.
 				// Native databases and legacy KINGBASE retain the original ordering rules.
 				SQLConfig<T, M, L> cfg = (ocfg != null && StringUtil.isNotEmpty(ocfg.getOrder(), true))
-					&& (isKingBaseCompatibilityMode || join.isLeftOrRightJoin()) ? ocfg : join.getJoinConfig());
+					&& (isKingBaseCompatibilityMode || join.isLeftOrRightJoin()) ? ocfg : join.getJoinConfig();
 
 				if (cfg != null) {
 					cfg.setMain(false).setKeyPrefix(true);
