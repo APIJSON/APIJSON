@@ -1613,11 +1613,11 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		List<Map<String, Object>> rows = new ArrayList<>();
 		try (ResultSet rs = cursor) {
 			ResultSetMetaData metadata = rs == null ? null : rs.getMetaData();
-			int columns = metadata == null ? null : metadata.getColumnCount();
-			if (columns != null) {
+			int count = metadata == null ? null : metadata.getColumnCount();
+			if (count > 0) {
 				while (rs.next()) {
 					Map<String, Object> row = new LinkedHashMap<>();
-					for (int i = 1; i <= columns; i++) {
+					for (int i = 1; i <= count; i++) {
 						String column = metadata.getColumnLabel(i);
 						row.put(column, getValue(config, rs, metadata, 0, null, i, column, null, null));
 					}
