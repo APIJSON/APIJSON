@@ -684,7 +684,7 @@ public abstract class AbstractParser<T, M extends Map<String, Object>, L extends
 
 		if (isNeedVerifyRole()) {
 			verifyConfigRole(config);
-			List<Join> jl = config.getJoinList();
+			List<Join<T, M, L>> jl = config.getJoinList();
 			if (jl != null) {
 				// Verify the joined rows before SQL generation and before caching any child results.
 				for (Join<T, M, L> join : jl) {
