@@ -1200,7 +1200,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		}
 
 		String lable = config.isKingBaseSQLServer() ? rsmd.getColumnLabel(columnIndex) : null;
-		return lable != null && lable.startsWith(AbstractSQLConfig.KINGBASE_SQLSERVER_JOIN_KEY_PREFIX));
+		return lable != null && lable.startsWith(AbstractSQLConfig.KINGBASE_SQLSERVER_JOIN_KEY_PREFIX);
 	}
 
 	/**
