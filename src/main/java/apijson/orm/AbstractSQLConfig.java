@@ -2674,7 +2674,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		String joinOuterOrder = "";
 		boolean isKingBaseSQLServer = isKingBaseSQLServer();
 		
-		if (joinList != null) {
+		if (joinList != null && ! joinList.isEmpty()) {
 			boolean first = true;
 			boolean isKingBaseCompatibilityMode = isKingBaseCompatibilityMode();
 			boolean isKingBaseMySQL = isKingBaseMySQL();
@@ -2698,9 +2698,8 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 					boolean derivedJoin = join.isLeftOrRightJoin() || "*".equals(join.getJoinType());
 					String c = derivedJoin && (isKingBaseMySQL || isKingBaseSQLServer)
 							? ((AbstractSQLConfig<?, ?, ?>) cfg).gainKingbaseDerivedOrderString(
-									isKingBaseSQLServer && join.getJoinConfig() != null
-											? join.getJoinConfig().getColumn() : cfg.getColumn())
-							: ((AbstractSQLConfig<?, ?, ?>) cfg).gainOrderString(false);
+									isKingBaseSQLServer && join.getJoinConfig() != null ? join.getJoinConfig().getColumn() : cfg.getColumn()
+							) : ((AbstractSQLConfig<?, ?, ?>) cfg).gainOrderString(false);
 
 					if (StringUtil.isNotEmpty(c, true)) {
 						joinOrder += (first ? "" : ", ") + c;
@@ -2718,43 +2717,47 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 		//		}
 
 		// 聚合函数不带 GROUP BY 时只有一行，不能补 ORDER BY，否则 SQL Server/DB2 报列未包含在聚合函数内
-		if (getCount() > 0 && (isKingBaseSQLServer || isSQLServer() || isDb2())
-				&& isAggregateWithoutGroup() == false) {
+		if (getCount() > 0 && (isKingBaseSQLServer || isSQLServer() || isDb2()) && isAggregateWithoutGroup() == false) {
 			// Oracle, SQL Server, DB2 的 OFFSET 必须加 ORDER BY.去掉Oracle，Oracle里面没有offset关键字
 
-			//			String[] ss = StringUtil.split(order);
-			if (StringUtil.isEmpty(order, true)) {  //SQL Server 子查询内必须指定 OFFSET 才能用 ORDER BY
+			// String[] ss = StringUtil.split(order);
+			if (StringUtil.isEmpty(order, true)) { // SQL Server 子查询内必须指定 OFFSET 才能用 ORDER BY
 				String idKey = getIdKey();
 				if (isKingBaseSQLServer) {
-					if (StringUtil.isEmpty(getGroup(), true) && column != null && column.stream()
-							.anyMatch(item -> !item.contains(")OVER(")
-									&& KingbaseMySQLExpressions.hasAggregateOrWindow(item, SQL_AGGREGATE_FUNCTION_MAP.keySet()))) {
+					if (StringUtil.isEmpty(getGroup(), true) && column != null && column.stream().anyMatch(
+						item -> (! item.contains(")OVER("))
+									&& KingbaseMySQLExpressions.hasAggregateOrWindow(item, SQL_AGGREGATE_FUNCTION_MAP.keySet()))
+					) {
 						return "";
 					}
-					if (isDistinct()) {
-						// The underlying id need not be part of the DISTINCT result.
-						if (column == null || column.isEmpty() || (getRaw() != null && getRaw().contains(KEY_COLUMN))) {
+					
+					if (isDistinct()) { // The underlying id need not be part of the DISTINCT result.
+						List<String> raw = getRaw();
+						if (column == null || column.isEmpty() || (raw != null && raw.contains(KEY_COLUMN))) {
 							return "";
 						}
+						
 						List<String> positions = new ArrayList<>(column.size());
 						for (int i = 1; i <= column.size(); i++) positions.add(Integer.toString(i));
 						return (hasPrefix ? " ORDER BY " : "") + String.join(", ", positions);
 					}
+					
 					String[] groupedKeys = StringUtil.split(getGroup());
 					if (groupedKeys != null && groupedKeys.length > 0) idKey = groupedKeys[0];
 					Subquery<T, M, L> source = getFrom();
-					List<String> sourceColumns = source == null || source.gainConfig() == null
-							? null : source.gainConfig().getColumn();
-					if (sourceColumns != null && !sourceColumns.isEmpty()) {
+					List<String> sourceColumns = source == null || source.gainConfig() == null ? null : source.gainConfig().getColumn();
+					if (sourceColumns != null && ! sourceColumns.isEmpty()) {
 						String projection = sourceColumns.get(0);
 						int alias = KingbaseMySQLExpressions.aliasIndex(projection);
 						String output = alias < 0 ? projection : projection.substring(alias + 1);
-						if (StringUtil.isName(output)) idKey = output;
+						if (StringUtil.isName(output)) {
+							idKey = output;
+						}
 					}
 				}
+				
 				if (StringUtil.isEmpty(idKey, true)) {
-					idKey = "id";
-					// ORDER BY NULL 不行，SQL Server 会报错，必须要有排序，才能使用 OFFSET FETCH，如果没有 idKey，请求中指定 @order 即可
+					idKey = "id"; // ORDER BY NULL 不行，SQL Server 会报错，必须要有排序，才能使用 OFFSET FETCH，如果没有 idKey，请求中指定 @order 即可
 				}
 				order = idKey; //让数据库调控默认升序还是降序  + "+";
 			}
@@ -2873,17 +2876,28 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	 * DISTINCT, derived tables and expressions may not expose the underlying key;
 	 * their explicit ordering must remain under the caller's control. */
 	private boolean canAppendKingbaseSQLServerPaginationId() {
-		if (isDistinct() || getFrom() != null || StringUtil.isNotEmpty(getGroup(), true)
-				|| (getHaving() != null && ! getHaving().isEmpty())
-				|| (getJoinList() != null && ! getJoinList().isEmpty())
-				|| (getRaw() != null && getRaw().contains(KEY_COLUMN))
-				|| ! StringUtil.isName(getIdKey())) {
+		String idKey = isDistinct() || getFrom() != null || StringUtil.isNotEmpty(getGroup(), true) ? null : getIdKey();
+		if (! StringUtil.isName(idKey)) {
+			return false;
+		}
+
+		Map<String, Object> having = getHaving();
+		if (having != null && ! having.isEmpty()) {
+			return false;
+		}
+
+		List<Join<T, M, L>> jl = getJoinList();
+		if (jl != null && ! jl.isEmpty()) {
+			return false;
+		}
+
+		List<String> raw = getRaw();
+		List<String> columns = raw != null && raw.contains(KEY_COLUMN) ? null : getColumn();
+		// A wildcard does not prove the configured/default key exists in the table.
+		if (columns == null || ! columns.contains(idKey)) {
 			return false;
 		}
 		
-		List<String> columns = getColumn();
-		// A wildcard does not prove the configured/default key exists in the table.
-		if (columns == null || !columns.contains(getIdKey())) return false;
 		for (String column : columns) {
 			if (! StringUtil.isName(column)) {
 				return false;
@@ -3291,27 +3305,29 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				}
 
 				// 解析函数内的参数
-				int functionParameterStart = getPreparedValueList() == null ? 0 : getPreparedValueList().size();
+				boolean isKingBaseSQLServer = isKingBaseSQLServer();
+				List<Object> pvl = getPreparedValueList();
+				int functionParameterStart = pvl == null ? 0 : pvl.size();
 				String ckeys[];
-				if ("date_format".equalsIgnoreCase(fun) && isKingBaseSQLServer()) {
-					String[] dateArgs = StringUtil.split(s);
-					if (distinct || dateArgs == null || dateArgs.length != 2) {
+				if ("date_format".equalsIgnoreCase(fun) && isKingBaseSQLServer) {
+					String[] dateArgs = distinct ? null : StringUtil.split(s);
+					if (dateArgs == null || dateArgs.length != 2) {
 						throw new IllegalArgumentException("SQL Server DATE_FORMAT requires a date and a literal format");
 					}
+					
 					String format = dateArgs[1];
 					if (format.startsWith("'") && format.endsWith("'") && format.length() >= 2) {
 						format = format.substring(1, format.length() - 1);
 					}
-					else if (!format.contains("%")) {
+					else if (! format.contains("%")) {
 						throw new UnsupportedOperationException("SQL Server DATE_FORMAT requires a literal format; quote literal text");
 					}
 					// Bind the translated format as data; it never becomes executable SQL.
 					String[] date = parseArgsSplitWithComma(dateArgs[0], false, containRaw, false);
-					ckeys = new String[]{StringUtil.get(date),
-							gainValue(SQLServerDateFormat.translate(format, isKingBaseSQLServer())).toString()};
+					ckeys = new String[]{StringUtil.get(date), gainValue(SQLServerDateFormat.translate(format, isKingBaseSQLServer)).toString()};
 				}
-				else if (isKingBaseSQLServer() && "json_length".equalsIgnoreCase(fun)
-						&& !distinct && s.startsWith("'") && s.length() > 1 && s.indexOf('\'', 1) == s.length() - 1) {
+				else if (isKingBaseSQLServer && distinct == false && "json_length".equalsIgnoreCase(fun)
+						&& s.startsWith("'") && s.length() > 1 && s.indexOf('\'', 1) == s.length() - 1) {
 					// Commas in a single quoted JSON document are data, not argument separators.
 					ckeys = new String[]{gainValue(s.substring(1, s.length() - 1)).toString()};
 				}
@@ -3319,7 +3335,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 					ckeys = parseArgsSplitWithComma(s, false, containRaw, allowAlias);
 				}
 
-				String suffix = expression.substring(end + 1); //:contactCount
+				String suffix = expression.substring(end + 1); // :contactCount
 				String alias = null;
 				if (allowAlias) {
 					int index = suffix.lastIndexOf(":");
@@ -3339,26 +3355,24 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 							+ " 中 ?value 必须符合正则表达式 " + PATTERN_RANGE + " 且不包含连续减号 -- 或注释符 /* ！不允许多余的空格！");
 				}
 
-				String nativeOrigin = gainSQLFunction(fun) + "(" + (distinct ? PREFIX_DISTINCT : "")
-						+ StringUtil.get(ckeys) + ")" + suffix;
-				if (isKingBaseMySQL()
-						&& allowAlias && KEY_COLUMN.equals(key) && StringUtil.isEmpty(alias, true)) {
+				String nativeOrigin = gainSQLFunction(fun) + "(" + (distinct ? PREFIX_DISTINCT : "") + StringUtil.get(ckeys) + ")" + suffix;
+				if (allowAlias && KEY_COLUMN.equals(key) && StringUtil.isEmpty(alias, true) && isKingBaseMySQL()) {
 					nativeOrigin = gainKingbaseLiteralResponseLabel(nativeOrigin, functionParameterStart);
 				}
+				
 				String origin = gainSQLFunctionExpression(fun, ckeys, distinct, suffix);
 				String responseAlias = gainKingbaseMySQLAggregateResponseAlias(key, fun, nativeOrigin, suffix, alias, allowAlias);
-				if (isKingBaseSQLServer() && allowAlias && KEY_COLUMN.equals(key)
-						&& StringUtil.isEmpty(responseAlias, true)) {
+				if (isKingBaseSQLServer && allowAlias && KEY_COLUMN.equals(key) && StringUtil.isEmpty(responseAlias, true)) {
 					if (hasRepeatedProjectionLabel(fun)) {
-						responseAlias = rememberKingbaseProjectionLabel(
-								gainKingbaseLiteralResponseLabel(nativeOrigin, functionParameterStart));
+						responseAlias = rememberKingbaseProjectionLabel(gainKingbaseLiteralResponseLabel(nativeOrigin, functionParameterStart));
 					}
 					else if ("json_length".equalsIgnoreCase(fun)) {
 						responseAlias = "json_length";
 					}
 				}
-				expression = origin + (StringUtil.isEmpty(responseAlias, true)
-						? "" : gainAs() + quote + (isKingBaseCompatibilityMode() ? responseAlias.replace(quote, quote + quote) : responseAlias) + quote);
+				expression = origin + (StringUtil.isEmpty(responseAlias, true) ? "" : (
+					gainAs() + quote + (isKingBaseCompatibilityMode() ? responseAlias.replace(quote, quote + quote) : responseAlias) + quote
+				));
 			}
 			else {
 				//是窗口函数   fun(arg0,agr1) OVER (agr0 agr1 ...)
@@ -3417,8 +3431,7 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 				String origin = containAgainst
 						? gainMatchAgainstExpression(key, fun, args, args2)
 						: fun + "(" + StringUtil.get(args) + ") OVER (" + StringUtil.get(args2) + ")";
-				expression = origin + suffix
-						+ (StringUtil.isEmpty(alias, true) ? "" : gainAs() + quote + alias + quote);
+				expression = origin + suffix + (StringUtil.isEmpty(alias, true) ? "" : gainAs() + quote + alias + quote);
 			}
 		}
 
@@ -3434,46 +3447,58 @@ public abstract class AbstractSQLConfig<T, M extends Map<String, Object>, L exte
 	 */
 	protected String gainKingbaseMySQLAggregateResponseAlias(String key, String function,
 			String origin, String suffix, String alias, boolean allowAlias) {
-		if (isKingBaseMySQL() == false || !KEY_COLUMN.equals(key) || !allowAlias) {
+		if (! (allowAlias && KEY_COLUMN.equals(key) || isKingBaseMySQL())) {
 			return alias;
 		}
-		boolean date = isMySQLDateArithmeticFunction(function) || "timestamp".equalsIgnoreCase(function);
-		if (date && StringUtil.isNotEmpty(suffix, true)) return alias;
+		
+		boolean isDateFun = "timestamp".equalsIgnoreCase(function) || isMySQLDateArithmeticFunction(function);
+		if (isDateFun && StringUtil.isNotEmpty(suffix, true)) {
+			return alias;
+		}
+		
 		String label = StringUtil.isNotEmpty(alias, true) ? alias : origin;
-		if (date && StringUtil.isNotEmpty(label, true)) {
+		if (isDateFun && StringUtil.isNotEmpty(label, true)) {
 			if (kingbaseMySQLLocalDateTimeAliases == null) {
 				kingbaseMySQLLocalDateTimeAliases = new HashSet<>();
 			}
 			kingbaseMySQLLocalDateTimeAliases.add(label);
 		}
 		if ("sum".equalsIgnoreCase(function) && StringUtil.isNotEmpty(label, true)) {
-			if (kingbaseMySQLSumAliases == null) kingbaseMySQLSumAliases = new HashSet<>();
+			if (kingbaseMySQLSumAliases == null) {
+				kingbaseMySQLSumAliases = new HashSet<>();
+			}
 			kingbaseMySQLSumAliases.add(label);
 		}
 		if (StringUtil.isEmpty(alias, true)) {
 			byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
 			if (labelBytes.length > KINGBASE_MYSQL_IDENTIFIER_BYTES) {
-				// Keep the SQL identifier short and stable across prepared and literal generation.
-				return rememberKingbaseProjectionLabel(label);
+				return rememberKingbaseProjectionLabel(label); // Keep the SQL identifier short and stable across prepared and literal generation.
 			}
 		}
+		
 		return label;
 	}
 
 	private boolean hasRepeatedProjectionLabel(String function) {
 		int count = 0;
-		if (column != null) for (String item : column) {
-			int alias = KingbaseMySQLExpressions.aliasIndex(item);
-			int start = item.indexOf('(');
-			String label = alias >= 0 ? item.substring(alias + 1) : start < 0 ? item : item.substring(0, start);
-			if (function.equalsIgnoreCase(label) && ++count > 1) return true;
+		if (column != null) {
+			for (String item : column) {
+				int alias = KingbaseMySQLExpressions.aliasIndex(item);
+				int start = item.indexOf('(');
+				String label = alias >= 0 ? item.substring(alias + 1) : start < 0 ? item : item.substring(0, start);
+				if (function.equalsIgnoreCase(label) && ++count > 1) {
+					return true;
+				}
+			}
 		}
 		return false;
 	}
 
 	private String rememberKingbaseProjectionLabel(String label) {
 		String sqlAlias = KINGBASE_MYSQL_PROJECTION_PREFIX + UUID.nameUUIDFromBytes(label.getBytes(StandardCharsets.UTF_8));
-		if (kingbaseProjectionLabels == null) kingbaseProjectionLabels = new HashMap<>();
+		if (kingbaseProjectionLabels == null) {
+			kingbaseProjectionLabels = new HashMap<>();
+		}
 		kingbaseProjectionLabels.put(sqlAlias, label);
 		return sqlAlias;
 	}
