@@ -9,6 +9,7 @@ import apijson.*;
 import apijson.orm.Join.On;
 import apijson.orm.exception.NotExistException;
 
+import java.io.BufferedReader;
 import java.io.Reader;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
@@ -154,11 +155,41 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		int c = statement.executeUpdate(sql);
 		return c;
 	}
+	private final ThreadLocal<PreparedStatement> kingbasePreparedCall = new ThreadLocal<>();
+
 	@Override
 	public ResultSet execute(@NotNull Statement statement, String sql) throws Exception {
-		statement.execute(sql);
+		if (statement == kingbasePreparedCall.get()) {
+			// Kingbase JDBC rejects Statement.execute(String) on a PreparedStatement.
+			((PreparedStatement) statement).execute();
+		}
+		else {
+			statement.execute(sql);
+		}
+		
 		ResultSet rs = statement.getResultSet();
 		return rs;
+	}
+
+	/** Execute the SQL already prepared for a Kingbase MySQL or Oracle procedure. */
+	protected ResultSet executeUnknownType(@NotNull SQLConfig<T, M, L> config, @NotNull Statement statement, String sql) throws Exception {
+		if ((config.isKingBaseMySQL() || config.isKingBaseOracle()) && statement instanceof PreparedStatement) {
+			PreparedStatement previous = kingbasePreparedCall.get();
+			kingbasePreparedCall.set((PreparedStatement) statement);
+			try {
+				// Keep the original extension hook, SQL text and statement identity.
+				return execute(statement, sql);
+			}
+			finally {
+				if (previous == null) {
+					kingbasePreparedCall.remove();
+				}
+				else {
+					kingbasePreparedCall.set(previous);
+				}
+			}
+		}
+		return execute(statement, sql);
 	}
 
 	public static int MIN_OPTIMIZE_CAPACITY = 2^16 - 1;
@@ -170,6 +201,12 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	 */
 	@Override
 	public M execute(@NotNull SQLConfig<T, M, L> config, boolean unknownType) throws Exception {
+		try (KingbaseMySQLCapabilities.Scope scope = kingbaseMySQLExecutionScope()) {
+			return executeWithSession(config, unknownType);
+		}
+	}
+
+	private M executeWithSession(SQLConfig<T, M, L> config, boolean unknownType) throws Exception {
 		long executedSQLStartTime = System.currentTimeMillis();
 		final String sql = config.gainSQL(false);
 
@@ -212,7 +249,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 					executedSQLStartTime = System.currentTimeMillis();
 				}
 				Statement statement = getStatement(config);
-				rs = execute(statement, sql);
+				rs = executeUnknownType(config, statement, sql);
 				int updateCount = statement.getUpdateCount();
 				if (isExplain == false) {
 					executedSQLDuration += System.currentTimeMillis() - executedSQLStartTime;
@@ -221,6 +258,10 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 				result = JSON.createJSONObject();
 				result.put(JSONResponse.KEY_COUNT, updateCount);
 				result.put("update", updateCount >= 0);
+				if (rs == null && config.isKingBaseOracle()) {
+					result.put("list", JSON.createJSONArray());
+					return result;
+				}
 				//导致后面 rs.getMetaData() 报错 Operation not allowed after ResultSet closed		result.put("moreResults", statement.getMoreResults());
 			}
 			else {
@@ -401,6 +442,11 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 				Join[] columnIndexAndJoinMap = isExplain || ! hasJoin ? null : new Join[length];
 				Map<String, Integer> repeatMap = columnIndexAndJoinMap == null || ! config.isQuestDB() ? null : new HashMap<>();
 				keyMap = repeatMap == null ? null : new HashMap<>();
+				Join[] projectionJoins = columnIndexAndJoinMap == null ? null : resolveProjectionJoins(config, rsmd);
+				boolean hasProjectionJoins = projectionJoins != null;
+				if (hasProjectionJoins) {
+					columnIndexAndJoinMap = projectionJoins;
+				}
 
 //				int viceColumnStart = length + 1; //第一个副表字段的index
 
@@ -430,7 +476,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 						Join curJoin = columnIndexAndJoinMap == null ? null : columnIndexAndJoinMap[i - 1];  // columnIndexAndJoinMap.get(i);
 
 						// 为什么 isExplain == false 不用判断？因为所有字段都在一张 Query Plan 表
-						if (index <= 0 && columnIndexAndJoinMap != null) { // && viceColumnStart > length) {
+						if (index <= 0 && columnIndexAndJoinMap != null && ! hasProjectionJoins) { // && viceColumnStart > length) {
 
 							SQLConfig<T, M, L> curConfig = curJoin == null || ! curJoin.isSQLJoin() ? null : curJoin.getCacheConfig();
 							List<String> curColumn = curConfig == null ? null : curConfig.getColumn();
@@ -756,6 +802,13 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	 * @throws Exception
 	 */
 	protected void executeAppJoin(SQLConfig<T, M, L> config, List<M> resultList, Map<String, List<M>> childMap, Map<String, String> keyMap) throws Exception {
+		try (KingbaseMySQLCapabilities.Scope scope = kingbaseMySQLExecutionScope()) {
+			executeAppJoinWithSession(config, resultList, childMap, keyMap);
+		}
+	}
+
+	private void executeAppJoinWithSession(SQLConfig<T, M, L> config, List<M> resultList,
+			Map<String, List<M>> childMap, Map<String, String> keyMap) throws Exception {
 		List<Join<T, M, L>> joinList = config.getJoinList();
 		if (joinList != null) {
 
@@ -927,7 +980,9 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 								+ "\n >>>>>>>>>>>>>>>>>>>>>>>>>>> \n\n");
 
 						//TODO 兼容复杂关联
-						cc.putWhere(key, result.get(key), true);  // APP JOIN 应该有且只有一个 ON 条件
+						Object cacheKeyValue = getAppJoinCacheKeyValue(
+								jc, result.get(key), targetValueList);
+						cc.putWhere(key, cacheKeyValue, true);  // APP JOIN 应该有且只有一个 ON 条件
 						String cacheSql = cc.gainSQL(false);
 						List<M> results = childMap.get(cacheSql);
 
@@ -967,7 +1022,110 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 
 	}
 
+	/** Infer Kingbase SELECT boundaries without relying on first-row values or JDBC table names. */
+	protected Join[] resolveProjectionJoins(SQLConfig<T, M, L> config, ResultSetMetaData md) throws SQLException {
+		if (config.isExplain() || RequestMethod.isHeadMethod(config.getMethod(), true) 
+			|| ! (config.isKingBaseOracle() || config.isKingBaseMySQL() || config.isKingBaseSQLServer())) {
+			return null;
+		}
+		
+		List<Join<T, M, L>> owners = new ArrayList<>();
+		List<Integer> widths = new ArrayList<>();
+		owners.add(null); 
+		widths.add(projectionWidth(config));
+		List<Join<T, M, L>> jl = config.getJoinList();
 
+		if (jl != null) {
+			for (Join<T, M, L> join : jl) {
+				if (join == null || join.isAppJoin()) {
+					continue;
+				}
+				
+				SQLConfig<T, M, L> on = join.getOnConfig();
+				SQLConfig<T, M, L> projected = on == null || on.getColumn() == null ? join.getJoinConfig() : on;
+				if (projected == null) {
+					return null;
+				}
+				
+				int width = projectionWidth(projected);
+				if (width >= 0 && (on == null || on.getColumn() == null) && config.isKingBaseSQLServer() && config instanceof AbstractSQLConfig) {
+					Set<String> keys = ((AbstractSQLConfig<?, ?, ?>) config).gainKingbaseSQLServerHiddenJoinKeys(join);
+					width += (keys == null ? 0 : keys.size());
+				}
+				
+				owners.add(join);
+				widths.add(width);
+			}
+		}
+		
+		int length = md.getColumnCount();
+		int known = 0, wildcard = -1;
+		for (int i = 0; i < widths.size(); i++) {
+			int width = widths.get(i);
+			if (width < -1 || (width == -1 && wildcard >= 0)) {
+				return null;
+			}
+			
+			if (width == -1) {
+				wildcard = i;
+			}
+			else {
+				known += width;
+			}
+		}
+		
+		if (wildcard >= 0) {
+			if (known >= length) {
+				return null;
+			}
+			
+			widths.set(wildcard, length - known);
+		} else if (known != length) {
+			return null;
+		}
+		
+		Join[] result = new Join[length];
+		int offset = 0;
+		for (int i = 0; i < owners.size(); i++) {
+			for (int end = offset + widths.get(i); offset < end; offset++) {
+				result[offset] = owners.get(i);
+			}
+		}
+		
+		return result;
+	}
+
+	private int projectionWidth(SQLConfig<T, M, L> config) {
+		List<String> raw = config.getRaw();
+		if (raw != null && raw.contains(apijson.JSONRequest.KEY_COLUMN)) {
+			return -2;
+		}
+		
+		List<String> columns = config.getColumn();
+		if (columns == null) {
+			return -1;
+		}
+		
+		// Empty @column can mean an omitted outer projection or a wildcard inside a JOIN.
+		if (columns.isEmpty()) {
+			return -2;
+		}
+		
+		for (String column : columns) {
+			if (column == null) {
+				return -2;
+			}
+			
+			int alias = column.lastIndexOf(':');
+			String name = alias < 0 ? column : column.substring(0, alias);
+			// Expressions/raw projections can produce multiple columns. Use the legacy path.
+			if (! StringUtil.isName(name)) {
+				return -2;
+			}
+		}
+		
+		return columns.size();
+	}
 
 	/**table.put(rsmd.getColumnLabel(i), rs.getObject(i));
 	 * @param config
@@ -994,7 +1152,25 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		}
 
 		String label = getKey(config, rs, rsmd, row, table, columnIndex, childMap, keyMap);
-		Object value = getValue(config, rs, rsmd, row, table, columnIndex, label, childMap, keyMap);
+
+		boolean isExplain = config.isExplain();
+		SQLConfig<T, M, L> valueConfig = config;
+		SQLConfig<T, M, L> jc = isExplain || join == null ? null : join.getJoinConfig();
+
+		if (jc == null) {
+		}
+		else if (config.isKingBaseMySQL()) {
+			SQLConfig<T, M, L> onConfig = join.getOnConfig();
+			valueConfig = onConfig != null && onConfig.getColumn() != null ? onConfig : jc;
+		}
+		else if ((config.isKingBaseOracle() || config.isKingBaseSQLServer()) && (jc.isKingBaseOracle() || jc.isKingBaseSQLServer())) {
+			// A projected Kingbase Oracle or SQL Server JOIN column belongs to the vice table.
+			// Its explicit @json declaration must not be lost or inherited from the
+			// main table. Preserve the existing mapping path for other databases.
+			valueConfig = jc;
+		}
+		
+		Object value = getValue(valueConfig, rs, rsmd, row, table, columnIndex, label, childMap, keyMap);
 
 		// 主表必须 put 至少一个 null 进去，否则全部字段为 null 都不 put 会导致中断后续正常返回值
 		if (value != null || ENABLE_OUTPUT_NULL_COLUMN || (join == null && table.isEmpty())) {
@@ -1018,14 +1194,63 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	protected boolean isHideColumn(@NotNull SQLConfig<T, M, L> config, @NotNull ResultSet rs, @NotNull ResultSetMetaData rsmd
 			, final int row, @NotNull M table, final int columnIndex, Map<String, M> childMap
 			, Map<String, String> keyMap) throws SQLException {
-		String columnName = rsmd.getColumnName(columnIndex);
-		// Kingbase Oracle pagination appends ROWNUM as the final RN column. It is
-		// an implementation detail and must not leak into the API response.
-		if (config.isKingBaseOracle() && config.getCount() > 0
-				&& columnIndex == rsmd.getColumnCount() && "RN".equalsIgnoreCase(columnName)) {
+		String name = rsmd.getColumnName(columnIndex);
+		if (name != null && name.startsWith("_")) {
 			return true;
 		}
-		return columnName.startsWith("_");
+
+		String lable = config.isKingBaseSQLServer() ? rsmd.getColumnLabel(columnIndex) : null;
+		return lable != null && lable.startsWith(AbstractSQLConfig.KINGBASE_SQLSERVER_JOIN_KEY_PREFIX);
+	}
+
+	/**
+	 * Kingbase MySQL mode may expose an integral JOIN key through JDBC with a
+	 * different Java representation from the corresponding main-table value
+	 * (for example String/BigDecimal versus Long). APIJSON's APP JOIN cache is
+	 * keyed by generated SQL, so using the returned representation can quote or
+	 * format the value differently and make the following per-row lookup miss
+	 * the batch-prefetched cache. Reuse the semantically equal original target
+	 * value when building that cache key. Other databases keep the original
+	 * behavior, and EXPLAIN never enters APP JOIN result caching.
+	 */
+	protected Object getAppJoinCacheKeyValue(SQLConfig<T, M, L> joinConfig, Object resultValue, List<Object> targetValueList) {
+		if (joinConfig == null || joinConfig.isKingBaseMySQL() == false) {
+			return resultValue;
+		}
+		if (resultValue == null || targetValueList == null) {
+			return resultValue;
+		}
+
+		// Exact identity wins, regardless of the order of numeric-looking strings.
+		for (Object targetValue : targetValueList) {
+			if (Objects.equals(resultValue, targetValue) || isEquivalentKingbaseMySQLAppJoinValue(resultValue, targetValue)) {
+				return targetValue;
+			}
+		}
+		
+		return resultValue;
+	}
+
+	private boolean isEquivalentKingbaseMySQLAppJoinValue(Object left, Object right) {
+		if (Objects.equals(left, right)) {
+			return true;
+		}
+		if (left == null || right == null) {
+			return false;
+		}
+		// Do not infer a VARCHAR key's type from its contents ("01" != "1").
+		// Cross-type text equality is safe; numeric normalization requires Numbers
+		// on both sides, i.e. representations already identified as numeric by JDBC.
+		if (! (left instanceof Number && right instanceof Number)) {
+			return left.toString().equals(right.toString());
+		}
+		
+		try {
+			return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString())) == 0; 
+		}
+		catch (NumberFormatException e) {
+			return left.toString().equals(right.toString());
+		}
 	}
 
 	/**resultList.put(position, table);
@@ -1050,6 +1275,8 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		long startTime = System.currentTimeMillis();
 		String key = rsmd.getColumnLabel(columnIndex);  // dotIndex < 0 ? label : label.substring(dotIndex + 1);
 		sqlResultDuration += System.currentTimeMillis() - startTime;
+
+		key = AbstractSQLConfig.restoreKingbaseProjectionLabel(config, key);
 
 		if (config.isHive()) {
 			String tableName = config.getTable();
@@ -1077,15 +1304,20 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			, Map<String, M> childMap, Map<String, String> keyMap) throws Exception {
 
 		long startTime = System.currentTimeMillis();
-		Object value = rs.getObject(columnIndex);
-		sqlResultDuration += System.currentTimeMillis() - startTime;
+		boolean kingbase = config.isKingBaseMySQL() || config.isKingBaseOracle() || config.isKingBaseSQLServer();
+		// Only Kingbase needs type metadata before reading precise TIME values.
+		Object value = kingbase ? null : rs.getObject(columnIndex);
+		if (! kingbase) {
+			sqlResultDuration += System.currentTimeMillis() - startTime;
+			return mapNativeResultValue(config, value, value instanceof String && isJSONType(config, rsmd, columnIndex, label), label);
+		}
 
-		//					Log.d(TAG, "name:" + rsmd.getColumnName(i));
-		//					Log.d(TAG, "label:" + rsmd.getColumnLabel(i));
-		//					Log.d(TAG, "type:" + rsmd.getColumnType(i));
-		//					Log.d(TAG, "typeName:" + rsmd.getColumnTypeName(i));
+		//	Log.d(TAG, "name:" + rsmd.getColumnName(i));
+		//	Log.d(TAG, "label:" + rsmd.getColumnLabel(i));
+		//	Log.d(TAG, "type:" + rsmd.getColumnType(i));
+		//	Log.d(TAG, "typeName:" + rsmd.getColumnTypeName(i));
 
-		//				Log.i(TAG, "select  while (rs.next()) { >> for (int i = 0; i < length; i++) {"
+		//	Log.i(TAG, "select  while (rs.next()) { >> for (int i = 0; i < length; i++) {"
 		//						+ "\n  >>> value = " + value);
 
 		int jdbcType = Types.OTHER;
@@ -1099,6 +1331,41 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			// still provides a safe fallback in that case.
 			Log.e(TAG, "getValue failed to read JDBC metadata for column " + label + ": " + e.getMessage());
 		}
+		
+		// Read TIME directly as text: getObject() may already lose fractional seconds
+		// or reject a MySQL duration outside the java.sql.Time clock-time range.
+		boolean preciseTime = jdbcType == Types.TIME || jdbcType == Types.TIME_WITH_TIMEZONE
+				|| config.isKingBaseMySQL() && "interval".equals(normalizeJdbcTypeName(typeName));
+		if (kingbase) {
+			String temporalText = config.isKingBaseMySQL() && (jdbcType == Types.DATE || jdbcType == Types.TIMESTAMP)
+					? rs.getString(columnIndex) : null;
+			// java.sql.Date/Timestamp cannot represent MySQL's zero date. Reading it
+			// through getObject may silently normalize it into a different year.
+			boolean zeroDate = temporalText != null && temporalText.startsWith("0000-00-00");
+			try {
+				value = zeroDate ? temporalText : preciseTime ? rs.getString(columnIndex) : rs.getObject(columnIndex);
+			}
+			catch (SQLException readFailure) {
+				if ((jdbcType != Types.DECIMAL && jdbcType != Types.NUMERIC)
+						|| ! (config.isKingBaseMySQL() && "22003".equals(readFailure.getSQLState()))) {
+					throw readFailure;
+				}
+				
+				// Some MySQL-mode drivers apply incorrect expression metadata in
+				// getObject's numeric conversion. The typed getter retains the actual
+				// server value; successful getObject mappings remain unchanged.
+				try {
+					value = rs.getBigDecimal(columnIndex);
+				}
+				catch (SQLException decimalFailure) {
+					readFailure.addSuppressed(decimalFailure);
+					throw readFailure;
+				}
+			}
+			
+			sqlResultDuration += System.currentTimeMillis() - startTime;
+		}
+		
 		return mapResultValue(config, value, jdbcType, typeName, label);
 	}
 
@@ -1114,142 +1381,72 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		if (config.isKingBaseSQLServer()) {
 			return mapKingbaseSQLServerResultValue(config, value, jdbcType, typeName, label);
 		}
-		if (value == null || value instanceof Boolean) {
-			return value;
-		}
-		if (value instanceof Number) {
-			return getNumVal((Number) value);
-		}
-		if (value instanceof Timestamp || value instanceof Date || value instanceof LocalDateTime) {
-			return value.toString();
-		}
-		if (value instanceof Year) {
-			return ((Year) value).getValue();
-		}
-		if (value instanceof Month) {
-			return ((Month) value).getValue();
-		}
-		if (value instanceof DayOfWeek) {
-			return ((DayOfWeek) value).getValue();
-		}
-		if (value instanceof TemporalAccessor || value instanceof UUID) {
-			return value.toString();
-		}
+		return mapNativeResultValue(config, value, value instanceof String && typeName != null && typeName.toLowerCase().contains("json"), label);
+	}
 
-		boolean castToJson = isJSONTypeName(typeName);
-		List<String> jsonColumns = config.getJson();
-		castToJson = castToJson || jsonColumns != null && jsonColumns.contains(label);
-
-		if (value instanceof Blob) {
+	/** The 8.2.0 result contract, also used by the original KINGBASE entry. */
+	protected Object mapNativeResultValue(@NotNull SQLConfig<T, M, L> config, Object value,
+			boolean castToJson, String label) throws Exception {
+		if (value instanceof Boolean) {
+			// Preserve the original value before applying an explicit @json declaration.
+		}
+		else if (value instanceof Number) {
+			value = getNumVal((Number) value);
+		}
+		else if (value instanceof Timestamp || value instanceof Date || value instanceof LocalDateTime) {
+			value = value.toString();
+		}
+		else if (value instanceof Year) {
+			value = ((Year) value).getValue();
+		}
+		else if (value instanceof Month) {
+			value = ((Month) value).getValue();
+		}
+		else if (value instanceof DayOfWeek) {
+			value = ((DayOfWeek) value).getValue();
+		}
+		else if (value instanceof Blob) {
 			value = new String(((Blob) value).getBytes(1, (int) ((Blob) value).length()), "UTF-8");
 			castToJson = true;
 		}
 		else if (value instanceof Clob) {
-			value = readClob((Clob) value);
 			castToJson = true;
-		}
-		else if (value instanceof SQLXML) {
-			value = ((SQLXML) value).getString();
-		}
-		else if (value instanceof java.sql.Array) {
-			java.sql.Array sqlArray = (java.sql.Array) value;
-			try {
-				value = mapArrayValue(config, sqlArray.getArray(), jdbcType, typeName, label);
+			StringBuffer sb = new StringBuffer();
+			BufferedReader br = new BufferedReader(((Clob) value).getCharacterStream());
+			String line = br.readLine();
+			while (line != null) {
+				sb.append(line);
+				line = br.readLine();
 			}
-			finally {
-				sqlArray.free();
-			}
-		}
-		else if (value.getClass().isArray() && value instanceof byte[] == false) {
-			value = mapArrayValue(config, value, jdbcType, typeName, label);
-		}
-		else if (config.isKingBase() && isKingBaseJdbcObject(value)) {
-			// Kingbase represents json/jsonb and several extension types as vendor objects.
-			// JSON values are parsed; other extension values are exposed as strings.
-			value = value.toString();
-		}
-
-		if (castToJson && value instanceof String) {
+			value = sb.toString();
 			try {
-				return JSON.parse(value);
+				br.close();
 			}
 			catch (Exception e) {
-				Log.e(TAG, "mapResultValue failed to parse JSON column " + label + ": " + e.getMessage());
+				Log.e(TAG, "close BufferedReader failed", e);
 			}
 		}
+
+		if (castToJson == false) {
+			List<String> json = config.getJson();
+			castToJson = json != null && json.contains(label);
+		}
+		if (castToJson) {
+			try {
+				value = JSON.parse(value);
+			}
+			catch (Exception e) {
+				Log.e(TAG, "getValue failed to parse JSON column " + label + ": " + e.getMessage());
+			}
+		}
+		
 		return value;
 	}
 
-	/**
-	 * Default KingbaseES Oracle-mode mapping. Kingbase maps Oracle NUMBER to
-	 * numeric, RAW/LONG RAW to bytea, and Oracle LOB/date/JSON types to the
-	 * corresponding Kingbase JDBC values. Keep precision and binary data JSON-safe.
-	 */
+	/** V9R1C10 defaults; the application supplies the Kingbase JDBC driver. */
 	protected Object mapKingbaseOracleResultValue(@NotNull SQLConfig<T, M, L> config, Object value
 			, int jdbcType, String typeName, String label) throws Exception {
-		if (value == null) {
-			return null;
-		}
-
-		String normalizedType = normalizeJdbcTypeName(typeName);
-		List<String> jsonColumns = config.getJson();
-		boolean json = isJSONTypeName(normalizedType) || jsonColumns != null && jsonColumns.contains(label);
-
-		if (value instanceof java.sql.Array) {
-			java.sql.Array sqlArray = (java.sql.Array) value;
-			try {
-				return mapArrayValue(config, sqlArray.getArray(), jdbcType, normalizedType, label);
-			}
-			finally {
-				sqlArray.free();
-			}
-		}
-		if (value.getClass().isArray() && !(value instanceof byte[])) {
-			return mapArrayValue(config, value, jdbcType, normalizedType, label);
-		}
-
-		if (value instanceof Blob) {
-			Blob blob = (Blob) value;
-			byte[] bytes = blob.getBytes(1, (int) blob.length());
-			value = json ? new String(bytes, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString(bytes);
-		}
-		else if (value instanceof byte[]) {
-			value = json ? new String((byte[]) value, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString((byte[]) value);
-		}
-		else if (value instanceof Clob) {
-			value = readClob((Clob) value);
-		}
-		else if (value instanceof SQLXML) {
-			value = ((SQLXML) value).getString();
-		}
-		else if (isKingBaseJdbcObject(value)) {
-			value = getKingbaseJdbcValue(value);
-		}
-
-		if (json && value instanceof String) {
-			try {
-				return JSON.parse(value);
-			}
-			catch (Exception e) {
-				Log.e(TAG, "mapKingbaseOracleResultValue failed to parse JSON column " + label + ": " + e.getMessage());
-				return value;
-			}
-		}
-		if (jdbcType == Types.BOOLEAN || "bool".equals(normalizedType) || "boolean".equals(normalizedType)) {
-			return mapBooleanValue(value);
-		}
-		if (value instanceof Boolean) {
-			return value;
-		}
-		if (value instanceof Number) {
-			return getNumVal((Number) value);
-		}
-		if (value instanceof Timestamp || value instanceof Date || value instanceof TemporalAccessor || value instanceof UUID) {
-			return value.toString();
-		}
-		return value;
+		return mapKingbaseResultValue(config, value, jdbcType, typeName, label);
 	}
 
 	protected Object mapBooleanValue(Object value) {
@@ -1271,36 +1468,79 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	/** Default KingbaseES MySQL-mode DB type to JSON-safe Java type mapping. */
 	protected Object mapKingbaseMySQLResultValue(@NotNull SQLConfig<T, M, L> config, Object value
 			, int jdbcType, String typeName, String label) throws Exception {
+		if (config instanceof AbstractSQLConfig && ((AbstractSQLConfig<?, ?, ?>) config).isKingbaseMySQLSumAlias(label)
+				&& (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long || value instanceof BigInteger)
+		) {
+			// MySQL SUM(exact integer) is DECIMAL, serialized by the native path
+			// as a string. Do not change COUNT, ordinary integers or floating SUM.
+			return value.toString();
+		}
+		return mapKingbaseResultValue(config, value, jdbcType, typeName, label);
+	}
+
+	/** Default KingbaseES SQL Server-mode mapping, using KES JDBC values. */
+	protected Object mapKingbaseSQLServerResultValue(@NotNull SQLConfig<T, M, L> config, Object value
+			, int jdbcType, String typeName, String label) throws Exception {
+		return mapKingbaseResultValue(config, value, jdbcType, typeName, label);
+	}
+
+	/**
+	 * Shared V9R1C10 mapping. JDBC OTHER is not an unsupported-type marker:
+	 * KES uses it for JSON, geometry, intervals and other extension values.
+	 * Keep the public mapResultValue hook and the three mode hooks overridable.
+	 */
+	protected Object mapKingbaseResultValue(@NotNull SQLConfig<T, M, L> config, Object value
+			, int jdbcType, String typeName, String label) throws Exception {
 		if (value == null) {
 			return null;
 		}
-
+		
 		String normalizedType = normalizeJdbcTypeName(typeName);
 		List<String> jsonColumns = config.getJson();
 		boolean json = isJSONTypeName(normalizedType) || jsonColumns != null && jsonColumns.contains(label);
 
+		if (value instanceof ResultSet) {
+			return mapKingbaseCursorValue(config, (ResultSet) value);
+		}
+		if (value instanceof Struct) {
+			return mapArrayValue(config, ((Struct) value).getAttributes(), Types.OTHER, null, null);
+		}
+		if (value instanceof RowId) {
+			return value.toString();
+		}
 		if (value instanceof java.sql.Array) {
-			java.sql.Array sqlArray = (java.sql.Array) value;
+			java.sql.Array array = (java.sql.Array) value;
 			try {
-				return mapArrayValue(config, sqlArray.getArray(), jdbcType, normalizedType, label);
+				return mapArrayValue(config, array.getArray(), array.getBaseType(), array.getBaseTypeName(), label);
 			}
 			finally {
-				sqlArray.free();
+				array.free();
 			}
 		}
 		if (value.getClass().isArray() && !(value instanceof byte[])) {
-			return mapArrayValue(config, value, jdbcType, normalizedType, label);
+			// Native arrays have no JDBC base metadata. Do not propagate Types.ARRAY
+			// or a boolean container's metadata into unrelated element values.
+			String elementType = normalizedType.startsWith("_") ? normalizedType.substring(1)
+					: (normalizedType.endsWith("[]") ? normalizedType.substring(0, normalizedType.length() - 2) : normalizedType);
+			return mapArrayValue(config, value, jdbcType == Types.ARRAY ? Types.OTHER : jdbcType, elementType, label);
 		}
-
+		// Multi-bit MySQL BIT is returned as unsigned big-endian bytes, not a binary LOB.
+		if (config.isKingBaseMySQL() && "bit".equals(normalizedType) && value instanceof byte[]) {
+			byte[] bits = (byte[]) value;
+			return getKingbaseNumVal(bits.length == 0 ? BigInteger.ZERO : new BigInteger(1, bits));
+		}
+		
 		if (value instanceof Blob) {
 			Blob blob = (Blob) value;
-			byte[] bytes = blob.getBytes(1, (int) blob.length());
-			value = json ? new String(bytes, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString(bytes);
+			long length = blob.length();
+			if (length > Integer.MAX_VALUE) {
+				throw new SQLException("Kingbase BLOB exceeds the in-memory JSON response limit: " + length);
+			}
+			byte[] bytes = blob.getBytes(1, (int) length);
+			value = json ? new String(bytes, StandardCharsets.UTF_8) : Base64.getEncoder().encodeToString(bytes);
 		}
 		else if (value instanceof byte[]) {
-			value = json ? new String((byte[]) value, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString((byte[]) value);
+			value = json ? new String((byte[]) value, StandardCharsets.UTF_8) : Base64.getEncoder().encodeToString((byte[]) value);
 		}
 		else if (value instanceof Clob) {
 			value = readClob((Clob) value);
@@ -1308,8 +1548,24 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		else if (value instanceof SQLXML) {
 			value = ((SQLXML) value).getString();
 		}
-		else if (isKingBaseJdbcObject(value)) {
-			value = getKingbaseJdbcValue(value);
+		else if (isKingBaseJdbcObject(value) && ! (value instanceof Number || value instanceof Date || value instanceof TemporalAccessor)) {
+			// Struct attributes have no ResultSetMetaData. KBobject still carries
+			// its database type, allowing nested JSON values to retain JSON semantics.
+			Class<?> cls = value.getClass();
+			if (normalizedType.isEmpty()) {
+				try {
+					Object vendorType = cls.getMethod("getType").invoke(value);
+					normalizedType = normalizeJdbcTypeName(vendorType == null ? null : vendorType.toString());
+				}
+				catch (NoSuchMethodException ignored) {
+					// Not every vendor wrapper exposes a type name.
+				}
+			}
+			Object unwrapped = getKingbaseJdbcValue(value);
+			if (unwrapped == value) {
+				throw new SQLException("Kingbase JDBC value cannot unwrap itself: " + cls.getName());
+			}
+			return mapResultValue(config, unwrapped, jdbcType, normalizedType, label);
 		}
 
 		if (json && value instanceof String) {
@@ -1317,105 +1573,60 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 				return JSON.parse(value);
 			}
 			catch (Exception e) {
-				Log.e(TAG, "mapKingbaseMySQLResultValue failed to parse JSON column " + label + ": " + e.getMessage());
+				Log.e(TAG, "mapKingbaseResultValue failed to parse JSON column " + label + ": " + e.getMessage());
 				return value;
 			}
 		}
-		if (jdbcType == Types.BOOLEAN || "bool".equals(normalizedType) || "boolean".equals(normalizedType)) {
+		if (jdbcType == Types.BOOLEAN || "bool".equals(normalizedType) || "boolean".equals(normalizedType)
+				|| "bit".equals(normalizedType) || (jdbcType == Types.BIT && normalizedType.isEmpty())) {
+			if (config.isKingBaseMySQL() && "bit".equals(normalizedType) && value instanceof Number) {
+				return getKingbaseNumVal((Number) value);
+			}
 			return mapBooleanValue(value);
 		}
 		if (value instanceof Boolean) {
 			return value;
 		}
 		if (value instanceof Number) {
-			return getNumVal((Number) value);
+			return getKingbaseNumVal((Number) value);
 		}
-		if (value instanceof Year) {
+		if (config.isKingBaseMySQL() && value instanceof Year) {
 			return ((Year) value).getValue();
 		}
-		if (value instanceof Timestamp || value instanceof Date || value instanceof TemporalAccessor || value instanceof UUID) {
+		// Timestamp retains the instant but toString() silently drops the offset.
+		if (value instanceof Timestamp && ("timestamptz".equals(normalizedType)
+				|| "timestamp with time zone".equals(normalizedType) || jdbcType == Types.TIMESTAMP_WITH_TIMEZONE)) {
+			return ((Timestamp) value).toInstant().toString();
+		}
+		if (value instanceof Timestamp && config.isKingBaseMySQL() && config instanceof AbstractSQLConfig
+				&& ((AbstractSQLConfig<?, ?, ?>) config).isKingbaseMySQLLocalDateTimeAlias(label)) {
+			return ((Timestamp) value).toLocalDateTime().toString();
+		}
+		if (value instanceof Date || value instanceof TemporalAccessor || value instanceof UUID) {
 			return value.toString();
 		}
 		return value;
 	}
 
-	/**
-	 * Default mapping for KingbaseES SQL Server mode. The mode exposes SQL
-	 * Server-compatible numeric, binary, date/time, JSON/JSONB, XML,
-	 * UNIQUEIDENTIFIER, ROWVERSION and SQL_VARIANT types through the Kingbase
-	 * JDBC driver. Preserve exact decimals, make binary values JSON-safe and
-	 * unwrap vendor objects without adding a compile-time driver dependency.
-	 */
-	protected Object mapKingbaseSQLServerResultValue(@NotNull SQLConfig<T, M, L> config, Object value
-			, int jdbcType, String typeName, String label) throws Exception {
-		if (value == null) {
-			return null;
-		}
-
-		String normalizedType = normalizeJdbcTypeName(typeName);
-		List<String> jsonColumns = config.getJson();
-		boolean json = isJSONTypeName(normalizedType) || jsonColumns != null && jsonColumns.contains(label);
-
-		if (value instanceof java.sql.Array) {
-			java.sql.Array sqlArray = (java.sql.Array) value;
-			try {
-				return mapArrayValue(config, sqlArray.getArray(), jdbcType, normalizedType, label);
-			}
-			finally {
-				sqlArray.free();
+	/** Materialize REF_CURSOR while its transaction is open; never serialize a JDBC handle. */
+	protected Object mapKingbaseCursorValue(@NotNull SQLConfig<T, M, L> config, ResultSet cursor) throws Exception {
+		List<Map<String, Object>> rows = new ArrayList<>();
+		try (ResultSet rs = cursor) {
+			ResultSetMetaData metadata = rs == null ? null : rs.getMetaData();
+			int count = metadata == null ? null : metadata.getColumnCount();
+			if (count > 0) {
+				while (rs.next()) {
+					Map<String, Object> row = new LinkedHashMap<>();
+					for (int i = 1; i <= count; i++) {
+						String column = metadata.getColumnLabel(i);
+						row.put(column, getValue(config, rs, metadata, 0, null, i, column, null, null));
+					}
+					rows.add(row);
+				}
 			}
 		}
-		if (value.getClass().isArray() && !(value instanceof byte[])) {
-			return mapArrayValue(config, value, jdbcType, normalizedType, label);
-		}
-
-		if (value instanceof Blob) {
-			Blob blob = (Blob) value;
-			byte[] bytes = blob.getBytes(1, (int) blob.length());
-			value = json ? new String(bytes, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString(bytes);
-		}
-		else if (value instanceof byte[]) {
-			value = json ? new String((byte[]) value, StandardCharsets.UTF_8)
-					: Base64.getEncoder().encodeToString((byte[]) value);
-		}
-		else if (value instanceof Clob) {
-			value = readClob((Clob) value);
-		}
-		else if (value instanceof SQLXML) {
-			value = ((SQLXML) value).getString();
-		}
-		else if (isKingBaseJdbcObject(value)) {
-			Object unwrapped = getKingbaseJdbcValue(value);
-			if (unwrapped != value) {
-				return mapKingbaseSQLServerResultValue(config, unwrapped, jdbcType, normalizedType, label);
-			}
-		}
-
-		if (json && value instanceof String) {
-			try {
-				return JSON.parse(value);
-			}
-			catch (Exception e) {
-				Log.e(TAG, "mapKingbaseSQLServerResultValue failed to parse JSON column " + label + ": " + e.getMessage());
-				return value;
-			}
-		}
-		if (jdbcType == Types.BOOLEAN || jdbcType == Types.BIT
-				|| "bool".equals(normalizedType) || "boolean".equals(normalizedType) || "bit".equals(normalizedType)) {
-			return mapBooleanValue(value);
-		}
-		if (value instanceof Boolean) {
-			return value;
-		}
-		if (value instanceof Number) {
-			return getNumVal((Number) value);
-		}
-		if (value instanceof Timestamp || value instanceof Date || value instanceof Time
-				|| value instanceof TemporalAccessor || value instanceof UUID) {
-			return value.toString();
-		}
-		return value;
+		
+		return rows;
 	}
 
 	protected String normalizeJdbcTypeName(String typeName) {
@@ -1428,17 +1639,24 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	}
 
 	protected Object getKingbaseJdbcValue(Object value) {
+		Class<?> cls = value == null ? null : value.getClass();
 		try {
-			Method method = value.getClass().getMethod("getValue");
-			return method.invoke(value);
+			Method method = cls.getMethod("getValue");
+			Object result = method.invoke(value);
+			// Some interval/geometry implementations expose their text only via toString.
+			return result == null ? value.toString() : result;
 		}
-		catch (Exception ignored) {
+		catch (NoSuchMethodException ignored) {
 			return value.toString();
+		}
+		catch (ReflectiveOperationException e) {
+			throw new IllegalArgumentException("Cannot read Kingbase JDBC value " + (cls == null ? null : cls.getName()), e);
 		}
 	}
 
 	protected boolean isJSONTypeName(String typeName) {
 		String normalized = normalizeJdbcTypeName(typeName);
+		// FIXME return normalized != null && normalized.toLowerCase().contains('json'); ?
 		return "json".equals(normalized) || "jsonb".equals(normalized)
 				|| "_json".equals(normalized) || "_jsonb".equals(normalized)
 				|| "json[]".equals(normalized) || "jsonb[]".equals(normalized);
@@ -1447,7 +1665,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	protected boolean isKingBaseJdbcObject(Object value) {
 		Package pkg = value == null ? null : value.getClass().getPackage();
 		String packageName = pkg == null ? value == null ? "" : value.getClass().getName() : pkg.getName();
-		return packageName.startsWith("com.kingbase8");
+		return packageName.equals("com.kingbase8") || packageName.startsWith("com.kingbase8.");
 	}
 
 	protected Object mapArrayValue(@NotNull SQLConfig<T, M, L> config, Object array, int jdbcType
@@ -1477,6 +1695,13 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		return sb.toString();
 	}
 
+	protected Object getKingbaseNumVal(Number value) {
+		if (value instanceof Double && !Double.isFinite((Double) value) || value instanceof Float && !Float.isFinite((Float) value)) {
+			return value.toString();
+		}
+		return getNumVal(value);
+	}
+
 	public Object getNumVal(Number value) {
 		if (value == null) {
 			return null;
@@ -1489,11 +1714,6 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		if (value instanceof BigDecimal) {
 			return ((BigDecimal) value).toString();
 		}
-		if (value instanceof Double && !Double.isFinite((Double) value)
-				|| value instanceof Float && !Float.isFinite((Float) value)) {
-			return value.toString();
-		}
-
 		double v = value.doubleValue();
 		// if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) { // 避免前端/客户端拿到精度丢失甚至严重失真的值
 		// 	return value.toString();
@@ -1502,7 +1722,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		if (v > 9007199254740991L || v < -9007199254740991L) { // 避免前端/客户端拿到精度丢失甚至严重失真的值
 			return value.toString();
 		}
-		
+
 		return value;
 	}
 
@@ -1527,7 +1747,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			//TODO CHAR和JSON类型的字段，getColumnType返回值都是1	，如果不用CHAR，改用VARCHAR，则可以用上面这行来提高性能。
 			//return rsmd.getColumnType(position) == 1;
 
-			return isJSONTypeName(column);
+			return config.isKingBaseCompatibilityMode() ? isJSONTypeName(column) : column.toLowerCase().contains("json");
 		} catch (SQLException e) {
 			Log.e(TAG, "isJsonColumn failed", e);
 		}
@@ -1542,23 +1762,40 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		return getStatement(config, null);
 	}
 
+	@SuppressWarnings("unchecked")
+	private KingbaseMySQLCapabilities.Scope kingbaseMySQLExecutionScope() {
+		return KingbaseMySQLCapabilities.enter(this, config -> getConnection((SQLConfig<T, M, L>) config));
+	}
+
 	@Override
 	public PreparedStatement getStatement(@NotNull SQLConfig<T, M, L> config, String sql) throws Exception {
+		try (KingbaseMySQLCapabilities.Scope scope = kingbaseMySQLExecutionScope()) {
+			return getStatementWithSession(config, sql);
+		}
+	}
+
+	private PreparedStatement getStatementWithSession(SQLConfig<T, M, L> config, String sql) throws Exception {
+		boolean kingbase = config.isKingBaseCompatibilityMode();
+		// FIXME 这段让人费解，为啥不是直接在 getConnection 后根据需要决定是否 sql = config.gainSQL ？
+		if ((! kingbase) && StringUtil.isEmpty(sql)) {
+			sql = config.gainSQL(config.isPrepared());
+		}
 		Connection conn = getConnection(config);
-		if (prepareDatabaseGeneratedId(config, conn)) {
+		if (kingbase && prepareDatabaseGeneratedId(config, conn)) {
 			// The caller may have generated SQL before metadata inspection. Rebuild it
 			// after removing APIJSON's synthetic id from the INSERT.
 			sql = null;
 		}
-		if (StringUtil.isEmpty(sql)) {
+		if (kingbase && StringUtil.isEmpty(sql)) {
 			sql = config.gainSQL(config.isPrepared());
 		}
+		
 		PreparedStatement statement; //创建Statement对象
-		if (config.getMethod() == RequestMethod.POST && config.getId() == null) { //自增id
-			if (config.isOracle() || config.isKingBase()) {
+		if (config.getId() == null && config.getMethod() == RequestMethod.POST) { //自增id
+			if (kingbase || config.isOracle()) {
 				// Oracle and Kingbase JDBC require the generated column name; the
 				// RETURN_GENERATED_KEYS flag alone may leave generatedKeys null.
-				String[] generatedColumns = {config.getIdKey()};
+				String[] generatedColumns = new String[]{ config.getIdKey() };
 				statement = conn.prepareStatement(sql, generatedColumns);
 			} else {
 				statement = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
@@ -1572,7 +1809,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
             // }
 
 			// TODO 补充各种支持 TYPE_SCROLL_SENSITIVE 和 CONCUR_UPDATABLE 的数据库
-			if (config.isKingBase()) {
+			if (kingbase) {
 				try {
 					statement = conn.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
 				}
@@ -1621,9 +1858,9 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 	 * omit that id only when the database declares the column auto-generated.
 	 */
 	protected boolean prepareDatabaseGeneratedId(@NotNull SQLConfig<T, M, L> config, @NotNull Connection conn) throws Exception {
-		if (config.getMethod() != RequestMethod.POST || !config.isKingBaseSQLServer()
-				|| !config.isIdGeneratedByAPIJSON() || config.getId() == null
-				|| !isAutoGeneratedIdColumn(config, conn)) {
+		if (config.getId() == null || config.getMethod() != RequestMethod.POST || ! ( config.isIdGeneratedByAPIJSON() 
+			&& (config.isKingBaseSQLServer() || config.isKingBaseOracle()) && isAutoGeneratedIdColumn(config, conn) )
+		) {
 			return false;
 		}
 
@@ -1675,13 +1912,37 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		String schema = config.gainSQLSchema();
 		String tablePath = (StringUtil.isEmpty(schema, true) ? "" : q + schema + q + ".")
 				+ q + config.gainSQLTable() + q;
-		String probeSql = "SELECT " + q + idKey + q + " FROM " + tablePath + " WHERE 1 = 0";
+		String probeSql = "SELECT " + q + idKey + q + " FROM " + tablePath + " WHERE 1 = 0"; // FIXME 太耗时了，应该加缓存
 		try (PreparedStatement probe = conn.prepareStatement(probeSql); ResultSet rs = probe.executeQuery()) {
 			return rs.getMetaData().isAutoIncrement(1);
 		}
 	}
 
 	public PreparedStatement setArgument(@NotNull SQLConfig<T, M, L> config, @NotNull PreparedStatement statement, int index, Object value) throws SQLException {
+		if (config.isKingBaseMySQL() || config.isKingBaseOracle() || config.isKingBaseSQLServer()) {
+			// Standard JDBC value interfaces must be bound before vendor-specific
+			// setObject inference. This does not require a parameter metadata query.
+			if (value instanceof NClob) {
+				statement.setNClob(index + 1, (NClob) value);
+				return statement;
+			}
+			if (value instanceof Blob) {
+				statement.setBlob(index + 1, (Blob) value);
+				return statement;
+			}
+			if (value instanceof Clob) {
+				statement.setClob(index + 1, (Clob) value);
+				return statement;
+			}
+			if (value instanceof SQLXML) {
+				statement.setSQLXML(index + 1, (SQLXML) value);
+				return statement;
+			}
+			if (value instanceof RowId) {
+				statement.setRowId(index + 1, (RowId) value);
+				return statement;
+			}
+		}
 		if (config.isKingBaseMySQL()) {
 			setKingbaseMySQLArgument(statement, index + 1, value);
 			return statement;
@@ -1694,11 +1955,6 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			setKingbaseSQLServerArgument(statement, index + 1, value);
 			return statement;
 		}
-		if (config.isKingBase() && value != null
-				&& (value instanceof Map || value instanceof Collection || value.getClass().isArray())) {
-			statement.setObject(index + 1, JSON.toJSONString(value), Types.OTHER);
-			return statement;
-		}
 		//JSON.isBooleanOrNumberOrString(v) 解决 PostgreSQL: Can't infer the SQL type to use for an instance of com.alibaba.fastjson.JSONList
 		if (apijson.JSON.isBoolOrNumOrStr(value)) {
 			statement.setObject(index + 1, value); //PostgreSQL JDBC 不支持隐式类型转换 tinyint = varchar 报错
@@ -1709,27 +1965,24 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		return statement;
 	}
 
-	protected void setKingbaseMySQLArgument(@NotNull PreparedStatement statement, int parameterIndex, Object value) throws SQLException {
-		int jdbcType = Types.OTHER;
-		String typeName = "";
-		try {
-			ParameterMetaData metadata = statement.getParameterMetaData();
-			if (metadata != null) {
-				jdbcType = metadata.getParameterType(parameterIndex);
-				typeName = normalizeJdbcTypeName(metadata.getParameterTypeName(parameterIndex));
-			}
+	/**
+	 * The deployed V008R006B0001 driver's MySQL binary array binding corrupts
+	 * false elements and fails for bytea[]. Its own textual array representation
+	 * can instead be parsed by the target parameter type without losing values.
+	 * Other JDBC Array implementations retain their standard binding contract.
+	 */
+	protected void setKingbaseArrayArgument(PreparedStatement statement, int parameterIndex, java.sql.Array value) throws SQLException {
+		if (isKingBaseJdbcObject(value)) {
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
 		}
-		catch (SQLException ignored) {
-			// The driver may not expose parameter metadata until execution.
+		else {
+			statement.setArray(parameterIndex, value);
 		}
+	}
 
+	protected void setKingbaseMySQLArgument(@NotNull PreparedStatement statement, int parameterIndex, Object value) throws SQLException {
 		if (value == null) {
-			if (jdbcType == Types.NULL || jdbcType == 0) {
-				statement.setObject(parameterIndex, null);
-			}
-			else {
-				statement.setNull(parameterIndex, jdbcType);
-			}
+			statement.setObject(parameterIndex, null);
 			return;
 		}
 		if (value instanceof byte[]) {
@@ -1737,20 +1990,15 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			return;
 		}
 		if (value instanceof java.sql.Array) {
-			statement.setArray(parameterIndex, (java.sql.Array) value);
+			setKingbaseArrayArgument(statement, parameterIndex, (java.sql.Array) value);
 			return;
 		}
 		if (value instanceof Map || value instanceof Collection || value.getClass().isArray()) {
 			String json = JSON.toJSONString(value);
-			if (isJSONTypeName(typeName) || jdbcType == Types.OTHER) {
-				statement.setObject(parameterIndex, json, Types.OTHER);
-			}
-			else {
-				statement.setString(parameterIndex, json);
-			}
+			statement.setObject(parameterIndex, json, Types.OTHER);
 			return;
 		}
-		if (value instanceof UUID && jdbcType == Types.OTHER) {
+		if (value instanceof UUID) {
 			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
 			return;
 		}
@@ -1776,8 +2024,20 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 				statement.setObject(parameterIndex, null);
 			}
 			else {
-				statement.setNull(parameterIndex, jdbcType);
+				statement.setNull(parameterIndex, jdbcType == Types.BIT || jdbcType == Types.NCHAR ? Types.OTHER : jdbcType);
 			}
+			return;
+		}
+		if (value instanceof Boolean && (jdbcType == Types.BIT || "bit".equals(typeName))) {
+			statement.setObject(parameterIndex, (Boolean) value ? "1" : "0", Types.OTHER);
+			return;
+		}
+		if (value instanceof Timestamp && "timestamptz".equals(typeName)) {
+			statement.setObject(parameterIndex, ((Timestamp) value).toInstant().toString(), Types.OTHER);
+			return;
+		}
+		if (value instanceof Time && "timetz".equals(typeName)) {
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
 			return;
 		}
 		if (value instanceof byte[]) {
@@ -1793,7 +2053,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			return;
 		}
 		if (value instanceof java.sql.Array) {
-			statement.setArray(parameterIndex, (java.sql.Array) value);
+			setKingbaseArrayArgument(statement, parameterIndex, (java.sql.Array) value);
 			return;
 		}
 		if (value instanceof Map || value instanceof Collection || value.getClass().isArray()) {
@@ -1815,7 +2075,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			return;
 		}
 		if (value instanceof UUID) {
-			statement.setString(parameterIndex, value.toString());
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
 			return;
 		}
 		statement.setObject(parameterIndex, value);
@@ -1835,13 +2095,31 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			// Kingbase JDBC may defer parameter metadata until execution.
 		}
 
+		// Kingbase SQL Server bigint is distinct from the driver's int8.
+		if (jdbcType == Types.BIGINT && "bigint".equals(typeName)
+				&& (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte)) {
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
+			return;
+		}
 		if (value == null) {
 			if (jdbcType == Types.NULL || jdbcType == 0 || jdbcType == Types.OTHER && typeName.isEmpty()) {
 				statement.setObject(parameterIndex, null);
 			}
 			else {
-				statement.setNull(parameterIndex, jdbcType);
+				statement.setNull(parameterIndex, jdbcType == Types.BIT || jdbcType == Types.NCHAR ? Types.OTHER : jdbcType);
 			}
+			return;
+		}
+		if (value instanceof Boolean && (jdbcType == Types.BIT || "bit".equals(typeName))) {
+			statement.setObject(parameterIndex, (Boolean) value ? "1" : "0", Types.OTHER);
+			return;
+		}
+		if (value instanceof Timestamp && "timestamptz".equals(typeName)) {
+			statement.setObject(parameterIndex, ((Timestamp) value).toInstant().toString(), Types.OTHER);
+			return;
+		}
+		if (value instanceof Time && "timetz".equals(typeName)) {
+			statement.setObject(parameterIndex, value.toString(), Types.OTHER);
 			return;
 		}
 		if (value instanceof byte[]) {
@@ -1861,7 +2139,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 			return;
 		}
 		if (value instanceof java.sql.Array) {
-			statement.setArray(parameterIndex, (java.sql.Array) value);
+			setKingbaseArrayArgument(statement, parameterIndex, (java.sql.Array) value);
 			return;
 		}
 		if (value instanceof Map || value instanceof Collection || value.getClass().isArray()) {
@@ -2042,7 +2320,7 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 //		if (connection == null) { // || connection.isClosed()) {
 //			return;
 //		}
-		
+
 		// 将所有连接进行提交
 		Collection<Connection> connections = connectionMap == null ? null : connectionMap.values();
 		if (connections != null) {
@@ -2097,6 +2375,12 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 
 	@Override
 	public ResultSet executeQuery(@NotNull SQLConfig<T, M, L> config, String sql) throws Exception {
+		try (KingbaseMySQLCapabilities.Scope scope = kingbaseMySQLExecutionScope()) {
+			return executeQueryWithSession(config, sql);
+		}
+	}
+
+	private ResultSet executeQueryWithSession(SQLConfig<T, M, L> config, String sql) throws Exception {
 		if (config.isPrepared() == false || config.isTDengine() // TDengine JDBC 不支持 PreparedStatement
             || (config.isExplain() && (config.isPresto() || config.isTrino()))) { // Presto JDBC 0.277 在 EXPLAIN 模式下预编译值不会替代 ? 占位导致报错
 
@@ -2162,7 +2446,15 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 		}
 
 		if (config.getId() == null && config.getMethod() == RequestMethod.POST) {  // 自增id
-			try (ResultSet rs = stt.getGeneratedKeys()) {
+			if (config.isKingBaseCompatibilityMode()) {
+				try (ResultSet rs = stt.getGeneratedKeys()) {
+					if (rs != null && rs.next()) {
+						config.setId(rs.getLong(1));
+					}
+				}
+			}
+			else {
+				ResultSet rs = stt.getGeneratedKeys();
 				if (rs != null && rs.next()) {
 					config.setId(rs.getLong(1));
 				}
@@ -2174,4 +2466,3 @@ public abstract class AbstractSQLExecutor<T, M extends Map<String, Object>, L ex
 
 
 }
-

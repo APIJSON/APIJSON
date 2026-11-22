@@ -156,6 +156,7 @@ public class AbstractSQLConfigAggregatePagingTest {
 
 	private static String build(Map<String, Object> request, String database, String version, int count)
 			throws Exception {
+		boolean kingbaseSQLServer = SQLConfig.DATABASE_KINGBASE_SQLSERVER.equals(database);
 		AbstractSQLConfig.Callback<Long, Map<String, Object>, List<Object>> callback =
 				new AbstractSQLConfig.SimpleCallback<Long, Map<String, Object>, List<Object>>() {
 					@Override
@@ -163,6 +164,11 @@ public class AbstractSQLConfigAggregatePagingTest {
 							String database, String datasource, String namespace, String catalog, String schema,
 							String table) {
 						return new AbstractSQLConfig<Long, Map<String, Object>, List<Object>>(method, table) {
+								@Override
+								public String gainSQLDatabase() {
+									return kingbaseSQLServer ? SQLConfig.DATABASE_KINGBASE_SQLSERVER : super.gainSQLDatabase();
+								}
+
 							@Override
 							public String gainDBVersion() {
 								return version;
@@ -188,7 +194,7 @@ public class AbstractSQLConfigAggregatePagingTest {
 
 		SQLConfig<Long, Map<String, Object>, List<Object>> config =
 				AbstractSQLConfig.newSQLConfig(RequestMethod.GET, TABLE, null, request, null, false, callback);
-		config.setDatabase(database);
+		config.setDatabase(kingbaseSQLServer ? SQLConfig.DATABASE_KINGBASE_AUTO : database);
 		config.setCount(count);
 		config.setPage(0);
 		return config.gainSQL(false);

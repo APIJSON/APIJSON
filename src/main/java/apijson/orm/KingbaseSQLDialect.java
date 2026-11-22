@@ -4,7 +4,7 @@ This source code is licensed under the Apache License Version 2.0.*/
 
 package apijson.orm;
 
-/** Centralized SQL capabilities for KingbaseES compatibility modes. */
+/** Internal SQL capabilities for detected KingbaseES modes; configure connections with KINGBASE_AUTO. */
 public enum KingbaseSQLDialect {
 	NONE(null, null, false, false),
 	LEGACY(SQLConfig.DATABASE_KINGBASE, "\"", false, false),
@@ -56,12 +56,11 @@ public enum KingbaseSQLDialect {
 	}
 
 	/**
-	 * SQL Server compatibility mode follows the SQL Server spelling of the
-	 * OFFSET/FETCH clause. Other T-SQL-family databases in APIJSON retain their
-	 * existing FETCH FIRST spelling.
+	 * Kingbase Oracle and SQL Server modes support OFFSET/FETCH without
+	 * introducing a synthetic result column.
 	 */
 	public String getSelectLimit(int offset, int count) {
-		if (isSQLServer()) {
+		if (isOracle() || isSQLServer()) {
 			return " OFFSET " + offset + " ROWS FETCH NEXT " + count + " ROWS ONLY";
 		}
 		return null;
@@ -71,11 +70,15 @@ public enum KingbaseSQLDialect {
 	 * KingbaseES exposes an explain statement returning the plan result set.
 	 * SQL Server's session-level STATISTICS PROFILE switch is therefore neither
 	 * required nor suitable for APIJSON's one-shot explain request. Oracle mode
-	 * retains its compatible EXPLAIN PLAN FOR spelling.
+	 * uses the plan-returning FORMAT TEXT spelling; PLAN FOR only returns a placeholder.
+	 * The original KINGBASE entry retains its existing PLAN FOR contract.
 	 */
 	public String getExplainPrefix() {
-		if (isOracle()) {
+		if (this == LEGACY) {
 			return "EXPLAIN PLAN FOR ";
+		}
+		if (isOracle()) {
+			return "EXPLAIN (FORMAT TEXT) ";
 		}
 		return isKingbase() ? "EXPLAIN " : null;
 	}
